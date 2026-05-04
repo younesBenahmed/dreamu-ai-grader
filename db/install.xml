@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="local/dreamu_ai/db" VERSION="2026042001" COMMENT="Dream-U AI Grader tables">
+  <TABLES>
+    <TABLE NAME="local_dreamu_ai_config" COMMENT="Per-assignment AI grading configuration">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="assignid" TYPE="int" LENGTH="10" NOTNULL="true" COMMENT="Foreign key to assign.id"/>
+        <FIELD NAME="enabled" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" COMMENT="Whether AI grading is enabled"/>
+        <FIELD NAME="prompt" TYPE="text" NOTNULL="false" COMMENT="Custom grading instructions for the AI"/>
+        <FIELD NAME="maxgrade" TYPE="number" LENGTH="10" DECIMALS="2" NOTNULL="true" DEFAULT="100" COMMENT="Maximum grade for this assignment"/>
+        <FIELD NAME="language" TYPE="char" LENGTH="5" NOTNULL="true" DEFAULT="fr" COMMENT="Language for AI feedback"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="assignid" TYPE="unique" FIELDS="assignid"/>
+      </KEYS>
+    </TABLE>
+    <TABLE NAME="local_dreamu_ai_grades" COMMENT="AI grading results history">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="assignid" TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" COMMENT="Student user ID"/>
+        <FIELD NAME="submissionid" TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="grade" TYPE="number" LENGTH="10" DECIMALS="2" NOTNULL="false" COMMENT="AI-assigned grade"/>
+        <FIELD NAME="feedback" TYPE="text" NOTNULL="false" COMMENT="AI-generated feedback"/>
+        <FIELD NAME="rawresponse" TYPE="text" NOTNULL="false" COMMENT="Raw AI response for debugging"/>
+        <FIELD NAME="status" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="pending" COMMENT="pending, graded, validated, rejected, error"/>
+        <FIELD NAME="validated" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" COMMENT="0=pending, 1=approved, 2=rejected"/>
+        <FIELD NAME="errormessage" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="assignid_userid" UNIQUE="false" FIELDS="assignid, userid"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>
