@@ -77,6 +77,7 @@ class grade_submissions extends \core\task\adhoc_task {
         }
 
         mtrace("  Found " . count($submissions) . " submissions to grade.");
+// Clean up old pending (non-validated) grades before re-grading        $old_pending = $DB->delete_records_select(            "local_dreamu_ai_grades",            "assignid = :assignid AND validated = 0",            ["assignid" => $assignid]        );        if ($old_pending) {            mtrace("  Cleaned up " . $old_pending . " old pending grades.");        }
 
         $grader = new \local_dreamu_ai\ai_grader();
         $graded = 0;
