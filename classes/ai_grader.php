@@ -37,11 +37,16 @@ class ai_grader {
     /** @var string Model name */
     private string $model;
 
+    private string $deepseek_endpoint;
+
     public function __construct() {
         $this->endpoint = get_config('local_dreamu_ai', 'api_endpoint')
             ?: 'http://100.76.166.71:8102/v1/chat/completions';
         $this->apikey = get_config('local_dreamu_ai', 'api_key') ?: 'sk-dummy';
         $this->model = get_config('local_dreamu_ai', 'model_name') ?: 'general';
+        // DeepSeek endpoint for dual grading
+        $base = str_replace('/v1/chat/completions', '', $this->endpoint);
+        $this->deepseek_endpoint = $base . '/v1/chat/completions';
     }
 
     /**
@@ -54,73 +59,148 @@ class ai_grader {
      * @return object Object with ->grade (float) and ->feedback (string)
      * @throws \moodle_exception If the API call fails or response is unparseable
      */
-    public function grade_submission(string $submissiontext, string $prompt, float $maxgrade, string $language = 'fr'): object {
+        public function grade_submission(string $submissiontext, string $prompt, float $maxgrade, string $language = 'fr'): object {
         $langname = ($language === 'fr') ? 'French' : 'English';
 
-        // No truncation for multi-pass - send full code
         $maxchars = 30000;
-        $truncated = false;
         if (strlen($submissiontext) > $maxchars) {
             $submissiontext = substr($submissiontext, 0, $maxchars);
-            $truncated = true;
         }
 
-        // === PASS 1: Read and understand the code ===
-        $system1 = "You are a code reviewer. Read the following student submission carefully. "
+        // === PASS 1 (Qwen): Read and understand ===
+        $system1 = "You are a code reviewer. Read the student submission carefully. "
             . "List ALL files found, describe what each file/function does in 2-3 sentences. "
             . "Identify the main algorithms implemented. Respond in {$langname}.";
-        $user1 = "Student submission:\n\n{$submissiontext}";
 
         try {
-            $analysis = $this->call_api($system1, $user1);
+            $analysis = $this->call_api($system1, "Student submission:\n\n{$submissiontext}");
         } catch (\Exception $e) {
             $analysis = "Analysis failed: " . $e->getMessage();
         }
 
-        // === PASS 2: Detailed code review ===
-        $system2 = "You are an expert C++ code reviewer. Based on the code and your previous analysis, "
-            . "perform a DETAILED review. You MUST:\n"
-            . "1. Cite SPECIFIC function names and explain issues (e.g. 'La fonction calculerBorda() ne gere pas le cas ou la liste est vide')\n"
-            . "2. Point out SPECIFIC bugs with the variable names involved\n"
-            . "3. Comment on code style: missing comments, bad variable names, poor structure\n"
-            . "4. Check if error handling exists for edge cases\n"
-            . "5. Check compilation: are there syntax errors, missing includes, type mismatches?\n"
-            . "Be VERY specific. Do NOT use generic phrases like 'le code est correct'. "
-            . "Cite actual code elements. Respond in {$langname}.";
-        $user2 = "Previous analysis:\n{$analysis}\n\nGrading criteria:\n{$prompt}\n\nFull code:\n{$submissiontext}";
+        // === PASS 2 (Qwen): Detailed review ===
+        $system2 = "You are an expert C++ code reviewer. Perform a DETAILED review. You MUST:\n"
+            . "1. Cite SPECIFIC function names and explain issues\n"
+            . "2. Point out SPECIFIC bugs with variable names\n"
+            . "3. Comment on code style, missing comments, poor structure\n"
+            . "4. Check error handling for edge cases\n"
+            . "5. Check compilation errors\n"
+            . "Be VERY specific. Respond in {$langname}.";
 
-        // Truncate user2 if too long for second pass
+        $user2 = "Analysis:\n{$analysis}\n\nCriteria:\n{$prompt}\n\nCode:\n{$submissiontext}";
         if (strlen($user2) > 28000) {
-            $user2 = substr($user2, 0, 28000) . "\n[... code truncated for review pass ...]";
+            $user2 = substr($user2, 0, 28000) . "\n[... truncated ...]";
         }
 
         try {
-            $review = $this->call_api($system2, $user2);
+            $qwen_review = $this->call_api($system2, $user2);
         } catch (\Exception $e) {
-            $review = "Review failed: " . $e->getMessage();
+            $qwen_review = "Review failed: " . $e->getMessage();
         }
 
-        // === PASS 3: Final grade ===
-        $system3 = "Based on your detailed code review below, give a final grade and feedback. "
+        // === PASS 3 (Qwen): Grade ===
+        $system3 = "Based on your review, give a grade in JSON: {\"grade\": NUMBER, \"feedback\": \"TEXT\"}\n"
+            . "Grade 0-{$maxgrade}. Use FULL range: 0-5 very bad, 6-8 poor, 9-11 average, 12-14 good, 15-17 very good, 18-{$maxgrade} excellent.\n"
+            . "Feedback MUST cite specific functions and issues. In {$langname}. At least 5 sentences.";
+
+        try {
+            $qwen_response = $this->call_api($system3, "Criteria:\n{$prompt}\n\nMax: {$maxgrade}\n\nReview:\n{$qwen_review}\n\nJSON:");
+            $qwen_result = $this->parse_response($qwen_response, $maxgrade);
+        } catch (\Exception $e) {
+            $qwen_result = (object)['grade' => $maxgrade * 0.5, 'feedback' => 'Qwen grading failed: ' . $e->getMessage()];
+        }
+
+        // === PASS 4 (DeepSeek): Independent counter-review and grade ===
+        $ds_system = "You are a strict C++ professor. A student submitted code and another AI gave a review. "
+            . "Read the code yourself and give YOUR OWN independent grade. "
+            . "You may DISAGREE with the first review. Be stricter on real bugs and missing features. "
             . "Respond ONLY in JSON: {\"grade\": NUMBER, \"feedback\": \"TEXT\"}\n"
-            . "Grade 0-{$maxgrade}. Use the FULL range: 0-6 = very bad, 7-9 = poor, 10-12 = average, 13-15 = good, 16-18 = very good, 19-20 = excellent.\n"
-            . "The feedback MUST include:\n"
-            . "- A summary of what was implemented\n"
-            . "- Specific issues found (cite function names and variables)\n"
-            . "- What was done well\n"
-            . "- What needs improvement\n"
-            . "Feedback in {$langname}. Be detailed (at least 5 sentences).";
-        $user3 = "Grading criteria:\n{$prompt}\n\nMax grade: {$maxgrade}\n\nDetailed review:\n{$review}\n\nJSON:";
+            . "Grade 0-{$maxgrade}. Use FULL range. Feedback in {$langname}. Cite specific functions.";
 
-        $response = $this->call_api($system3, $user3);
+        $ds_user = "Criteria:\n{$prompt}\n\nMax: {$maxgrade}\n\nFirst AI review:\n" . substr($qwen_review, 0, 3000)
+            . "\n\nFirst AI grade: " . $qwen_result->grade . "/{$maxgrade}"
+            . "\n\nStudent code:\n" . substr($submissiontext, 0, 8000) . "\n\nYour independent JSON grade:";
 
-        $result = $this->parse_response($response, $maxgrade);
+        try {
+            $ds_response = $this->call_deepseek($ds_system, $ds_user);
+            $ds_result = $this->parse_response($ds_response, $maxgrade);
+        } catch (\Exception $e) {
+            // If DeepSeek fails, use only Qwen grade
+            $ds_result = (object)['grade' => $qwen_result->grade, 'feedback' => 'DeepSeek review unavailable'];
+        }
 
-        // Append the detailed review to the feedback
-        $result->feedback = $result->feedback . "\n\n--- Analyse detaillee ---\n" . $review;
+        // === FINAL: Average both grades ===
+        $final_grade = round(($qwen_result->grade + $ds_result->grade) / 2, 2);
+        $final_grade = max(0, min($maxgrade, $final_grade));
+
+        $final_feedback = "**Note Qwen: " . $qwen_result->grade . "/{$maxgrade}** - " . substr($qwen_result->feedback, 0, 300)
+            . "\n\n**Note DeepSeek: " . $ds_result->grade . "/{$maxgrade}** - " . substr($ds_result->feedback, 0, 300)
+            . "\n\n**Note finale (moyenne): {$final_grade}/{$maxgrade}**"
+            . "\n\n--- Analyse detaillee ---\n" . $qwen_review;
+
+        $result = new \stdClass();
+        $result->grade = $final_grade;
+        $result->feedback = $final_feedback;
 
         return $result;
     }
+
+    /**
+     * Call DeepSeek API directly (bypass router to avoid image detection).
+     */
+    private function call_deepseek(string $systemprompt, string $userprompt): string {
+        $systemprompt = $this->sanitize_utf8($systemprompt);
+        $userprompt = $this->sanitize_utf8($userprompt);
+
+        // Use DeepSeek endpoint (port 8103)
+        $endpoint = str_replace(':8200/', ':8103/', $this->endpoint);
+
+        $payload = json_encode([
+            'model' => 'reasoning-lite',
+            'messages' => [
+                ['role' => 'system', 'content' => $systemprompt],
+                ['role' => 'user', 'content' => $userprompt],
+            ],
+            'temperature' => 0.3,
+            'max_tokens' => 1500,
+        ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+
+        $ch = curl_init($endpoint);
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $payload,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $this->apikey,
+            ],
+            CURLOPT_TIMEOUT => 300,
+            CURLOPT_CONNECTTIMEOUT => 30,
+        ]);
+
+        $response = curl_exec($ch);
+        $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($response === false || $httpcode !== 200) {
+            throw new \moodle_exception('api_error', 'local_dreamu_ai', '', null, "DeepSeek HTTP {$httpcode}");
+        }
+
+        $decoded = json_decode($response, true);
+        $content = $decoded['choices'][0]['message']['content'] ?? '';
+
+        // Remove <think> tags from DeepSeek
+        $content = preg_replace('/<think>.*?<\/think>/s', '', $content);
+        // Remove English thinking before French
+        if (preg_match('/(Pour |L\'|La |Le |Les |Voici |\{)/u', $content, $m, PREG_OFFSET_CAPTURE)) {
+            if ($m[0][1] > 100) {
+                $content = substr($content, $m[0][1]);
+            }
+        }
+
+        return trim($content);
+    }
+
     private function call_api(string $systemprompt, string $userprompt): string {
         // Sanitize UTF-8: remove invalid sequences that would break JSON encoding.
         $systemprompt = $this->sanitize_utf8($systemprompt);
