@@ -1,27 +1,4 @@
 <?php
-// This file is part of Moodle - http://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
-
-/**
- * Page to trigger AI grading for all submissions.
- *
- * @package    local_dreamu_ai
- * @copyright  2026 Dream-U / AMU / IUT Aix-en-Provence
- * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
- */
-
 require_once(__DIR__ . '/../../config.php');
 require_once($CFG->dirroot . '/mod/assign/locallib.php');
 
@@ -39,7 +16,7 @@ $assign = new assign($context, $cm, $course);
 $config = $DB->get_record('local_dreamu_ai_config', ['assignid' => $cm->instance]);
 
 if (!$config || !$config->enabled) {
-    throw new moodle_exception('AI grading is not enabled for this assignment.');
+    throw new moodle_exception('La correction IA n\'est pas activée pour ce devoir.');
 }
 
 $PAGE->set_url(new moodle_url('/local/dreamu_ai/grade.php', ['id' => $cmid]));
@@ -47,7 +24,6 @@ $PAGE->set_title(get_string('grade_submissions', 'local_dreamu_ai'));
 $PAGE->set_heading($course->fullname);
 
 if ($confirm && confirm_sesskey()) {
-    // Count submissions.
     $submissions = $DB->get_records('assign_submission', [
         'assignment' => $cm->instance,
         'status' => 'submitted',
@@ -72,11 +48,13 @@ if ($confirm && confirm_sesskey()) {
     $task->set_userid($USER->id);
     \core\task\manager::queue_adhoc_task($task);
 
+    // Trigger cron in background to start the task immediately.
+    $cronphp = $CFG->dirroot . '/admin/cli/cron.php';
+    @exec("php {$cronphp} > /dev/null 2>&1 &");
+
+    // Redirect to progress page.
     redirect(
-        new moodle_url('/mod/assign/view.php', ['id' => $cmid]),
-        get_string('grading_started', 'local_dreamu_ai'),
-        null,
-        \core\output\notification::NOTIFY_SUCCESS
+        new moodle_url('/local/dreamu_ai/progress.php', ['id' => $cmid]),
     );
 }
 
@@ -84,22 +62,29 @@ if ($confirm && confirm_sesskey()) {
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('grade_submissions', 'local_dreamu_ai'));
 
-// Show info about what will be graded.
 $submissioncount = $DB->count_records('assign_submission', [
     'assignment' => $cm->instance,
     'status' => 'submitted',
     'latest' => 1,
 ]);
 
-echo html_writer::tag('p', "Assignment: <strong>{$assign->get_instance()->name}</strong>");
-echo html_writer::tag('p', "Submissions to grade: <strong>{$submissioncount}</strong>");
-echo html_writer::tag('p', "Max grade: <strong>{$config->maxgrade}</strong>");
-echo html_writer::tag('p', "Feedback language: <strong>{$config->language}</strong>");
+$maxgrade = floatval($assign->get_instance()->grade);
+$langmap = ['fr' => 'Français', 'en' => 'Anglais'];
+
+echo '<div class="card mb-3"><div class="card-body">';
+echo '<h4>' . format_string($assign->get_instance()->name) . '</h4>';
+echo '<table class="table table-sm" style="max-width:400px;">';
+echo '<tr><td>Soumissions à corriger</td><td><strong>' . $submissioncount . '</strong></td></tr>';
+echo '<tr><td>Note maximale</td><td><strong>' . $maxgrade . '</strong></td></tr>';
+echo '<tr><td>Langue du feedback</td><td><strong>' . ($langmap[$config->language] ?? $config->language) . '</strong></td></tr>';
+echo '<tr><td>Temps estimé</td><td><strong>~' . ($submissioncount * 2) . ' minutes</strong></td></tr>';
+echo '</table>';
 
 if (!empty($config->prompt)) {
-    echo html_writer::tag('p', "Grading instructions:");
-    echo html_writer::tag('pre', s($config->prompt), ['style' => 'background:#f5f5f5; padding:10px; border-radius:5px;']);
+    echo '<p><strong>Consignes de correction :</strong></p>';
+    echo '<pre style="background:#f5f5f5; padding:10px; border-radius:5px; max-height:150px; overflow-y:auto;">' . s($config->prompt) . '</pre>';
 }
+echo '</div></div>';
 
 $confirmurl = new moodle_url('/local/dreamu_ai/grade.php', [
     'id' => $cmid,
