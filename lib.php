@@ -97,6 +97,7 @@ function local_dreamu_ai_extend_settings_navigation(settings_navigation $setting
         navigation_node::TYPE_SETTING,
         null,
         'dreamu_ai_history',
+// Add "Import Submissions" link.    $importurl = new moodle_url("/local/dreamu_ai/import_submissions.php", ["id" => $cm->id]);    $assignnode->add(        "Import Submissions",        $importurl,        navigation_node::TYPE_SETTING,        null,        "dreamu_ai_import",        new pix_icon("i/upload", "")    );
         new pix_icon('i/report', '')
     );
 }
