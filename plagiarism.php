@@ -23,14 +23,11 @@ echo $OUTPUT->header();
 echo $OUTPUT->heading('Détection de plagiat : ' . format_string($assignname));
 
 // Get all submissions with text.
-$submissions = $assign->get_all_submissions();
-if (empty($submissions)) {
-    $submissions = $DB->get_records('assign_submission', [
-        'assignment' => $cm->instance,
-        'status' => 'submitted',
-        'latest' => 1,
-    ]);
-}
+$submissions = $DB->get_records('assign_submission', [
+    'assignment' => $cm->instance,
+    'status' => 'submitted',
+    'latest' => 1,
+]);
 
 $submissiontexts = [];
 $usernames = [];
