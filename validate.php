@@ -145,6 +145,14 @@ if ($action === 'approveall' && confirm_sesskey()) {
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('validate_grades', 'local_dreamu_ai'));
 
+// Action bar: Export CSV, Stats.
+echo html_writer::start_div('mb-3');
+$csvurl = new moodle_url('/local/dreamu_ai/export_csv.php', ['id' => $cmid]);
+echo html_writer::link($csvurl, 'Exporter CSV', ['class' => 'btn btn-outline-primary mr-2']);
+$statsurl = new moodle_url('/local/dreamu_ai/stats.php', ['id' => $cmid]);
+echo html_writer::link($statsurl, 'Statistiques', ['class' => 'btn btn-outline-info mr-2']);
+echo html_writer::end_div();
+
 // Get pending AI grades for this assignment.
 $records = $DB->get_records('local_dreamu_ai_grades', [
     'assignid' => $cm->instance,
@@ -262,6 +270,16 @@ if (!empty($pending)) {
         echo html_writer::link($rejecturl, get_string('reject_grade', 'local_dreamu_ai'), [
             'class' => 'btn btn-danger',
             'onclick' => "return confirm('" . get_string('confirm_reject', 'local_dreamu_ai') . "');",
+        ]);
+
+        // Re-grade button.
+        $regradeurl = new moodle_url('/local/dreamu_ai/regrade.php', [
+            'id' => $cmid,
+            'userid' => $record->userid,
+        ]);
+        echo ' ';
+        echo html_writer::link($regradeurl, 'Re-corriger', [
+            'class' => 'btn btn-warning',
         ]);
 
         echo html_writer::end_div();
