@@ -16,11 +16,11 @@ $maxgrade = floatval($assign->get_instance()->grade);
 $assignname = $assign->get_instance()->name;
 
 $PAGE->set_url(new moodle_url('/local/dreamu_ai/stats.php', ['id' => $cmid]));
-$PAGE->set_title('AI Grading Statistics - ' . $assignname);
+$PAGE->set_title('Statistiques de correction IA - ' . $assignname);
 $PAGE->set_heading($course->fullname);
 
 echo $OUTPUT->header();
-echo $OUTPUT->heading('Statistics: ' . format_string($assignname));
+echo $OUTPUT->heading('Statistiques : ' . format_string($assignname));
 
 // Get validated + graded grades.
 $records = $DB->get_records_select('local_dreamu_ai_grades',
@@ -29,7 +29,7 @@ $records = $DB->get_records_select('local_dreamu_ai_grades',
 );
 
 if (empty($records)) {
-    echo $OUTPUT->notification('No grades found. Run AI grading first.', 'info');
+    echo $OUTPUT->notification('Aucune note trouvée. Lancez d\'abord la correction IA.', 'info');
     $backurl = new moodle_url('/mod/assign/view.php', ['id' => $cmid]);
     echo $OUTPUT->single_button($backurl, get_string('back'), 'get');
     echo $OUTPUT->footer();
@@ -72,12 +72,12 @@ foreach ($grades as $g) {
 echo '<div class="row mb-4">';
 
 $stats = [
-    ['Students', $count, 'secondary'],
-    ['Average', number_format($average, 2) . ' / ' . $maxgrade, 'primary'],
-    ['Median', number_format($median, 2), 'info'],
+    ['Étudiants', $count, 'secondary'],
+    ['Moyenne', number_format($average, 2) . ' / ' . $maxgrade, 'primary'],
+    ['Médiane', number_format($median, 2), 'info'],
     ['Min', number_format($min, 2), 'danger'],
     ['Max', number_format($max, 2), 'success'],
-    ['Std Dev', number_format($stddev, 2), 'warning'],
+    ['Écart-type', number_format($stddev, 2), 'warning'],
 ];
 
 foreach ($stats as [$label, $value, $color]) {
@@ -93,7 +93,7 @@ echo '</div>';
 
 // Distribution chart (CSS bars).
 echo '<div class="card mb-4"><div class="card-body">';
-echo '<h4>Grade Distribution</h4>';
+echo '<h4>Distribution des notes</h4>';
 
 $maxbucket = max(1, max($buckets));
 foreach ($buckets as $label => $count_b) {
@@ -112,10 +112,10 @@ echo '</div></div>';
 
 // Grade table per student.
 echo '<div class="card mb-4"><div class="card-body">';
-echo '<h4>Grades per Student</h4>';
+echo '<h4>Notes par étudiant</h4>';
 
 $table = new html_table();
-$table->head = ['Student', 'Grade', 'Status', 'Feedback (excerpt)'];
+$table->head = ['Étudiant', 'Note', 'Statut', 'Feedback (extrait)'];
 $table->attributes['class'] = 'generaltable';
 
 foreach ($records as $record) {
@@ -123,8 +123,8 @@ foreach ($records as $record) {
     if (!$user) continue;
 
     $statusmap = [
-        'validated' => '<span class="badge badge-success bg-success">Validated</span>',
-        'graded' => '<span class="badge badge-warning bg-warning">Pending</span>',
+        'validated' => '<span class="badge badge-success bg-success">Validée</span>',
+        'graded' => '<span class="badge badge-warning bg-warning">En attente</span>',
     ];
 
     $feedback = strip_tags($record->feedback ?? '');
@@ -269,10 +269,10 @@ if (!empty($manualgrades)) {
 
 // Export CSV button.
 $csvurl = new moodle_url('/local/dreamu_ai/export_csv.php', ['id' => $cmid]);
-echo '<a href="' . $csvurl . '" class="btn btn-outline-primary mr-2">Export CSV</a>';
+echo '<a href="' . $csvurl . '" class="btn btn-outline-primary mr-2">Exporter CSV</a>';
 
 // Back button.
 $backurl = new moodle_url('/local/dreamu_ai/validate.php', ['id' => $cmid]);
-echo '<a href="' . $backurl . '" class="btn btn-secondary">Back to Validation</a>';
+echo '<a href="' . $backurl . '" class="btn btn-secondary">Retour à la validation</a>';
 
 echo $OUTPUT->footer();

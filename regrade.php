@@ -17,13 +17,13 @@ $assign = new assign($context, $cm, $course);
 $config = $DB->get_record('local_dreamu_ai_config', ['assignid' => $cm->instance]);
 
 if (!$config || !$config->enabled) {
-    throw new moodle_exception('AI grading is not enabled for this assignment.');
+    throw new moodle_exception('La correction IA n\'est pas activée pour ce devoir.');
 }
 
 $student = $DB->get_record('user', ['id' => $userid], '*', MUST_EXIST);
 
 $PAGE->set_url(new moodle_url('/local/dreamu_ai/regrade.php', ['id' => $cmid, 'userid' => $userid]));
-$PAGE->set_title('Re-grade ' . fullname($student));
+$PAGE->set_title('Re-corriger ' . fullname($student));
 $PAGE->set_heading($course->fullname);
 
 if ($confirm && confirm_sesskey()) {
@@ -38,7 +38,7 @@ if ($confirm && confirm_sesskey()) {
     if (!$submission) {
         redirect(
             new moodle_url('/local/dreamu_ai/validate.php', ['id' => $cmid]),
-            'No submission found for this student.',
+            'Aucune soumission trouvée pour cet étudiant.',
             null,
             \core\output\notification::NOTIFY_ERROR
         );
@@ -73,7 +73,7 @@ if ($confirm && confirm_sesskey()) {
 
         if (empty(trim($submissiontext))) {
             throw new \moodle_exception('empty_submission', 'local_dreamu_ai', '', null,
-                'Submission is empty or contains only binary files.');
+                'La soumission est vide ou ne contient que des fichiers binaires.');
         }
 
         $grader = new \local_dreamu_ai\ai_grader();
@@ -90,7 +90,7 @@ if ($confirm && confirm_sesskey()) {
 
         redirect(
             new moodle_url('/local/dreamu_ai/validate.php', ['id' => $cmid]),
-            'Re-grading complete for ' . fullname($student) . ': ' . $result->grade . '/' . $maxgrade,
+            'Re-correction terminée pour ' . fullname($student) . ' : ' . $result->grade . '/' . $maxgrade,
             null,
             \core\output\notification::NOTIFY_SUCCESS
         );
@@ -103,7 +103,7 @@ if ($confirm && confirm_sesskey()) {
 
         redirect(
             new moodle_url('/local/dreamu_ai/validate.php', ['id' => $cmid]),
-            'Re-grading failed: ' . $e->getMessage(),
+            'Échec de la re-correction : ' . $e->getMessage(),
             null,
             \core\output\notification::NOTIFY_ERROR
         );
@@ -112,10 +112,10 @@ if ($confirm && confirm_sesskey()) {
 
 // Confirmation page.
 echo $OUTPUT->header();
-echo $OUTPUT->heading('Re-grade: ' . fullname($student));
+echo $OUTPUT->heading('Re-corriger : ' . fullname($student));
 
-echo html_writer::tag('p', 'This will re-run the AI grading for <strong>' . fullname($student) . '</strong>.');
-echo html_writer::tag('p', 'Any previous unvalidated grade for this student will be replaced.');
+echo html_writer::tag('p', 'Cela relancera la correction IA pour <strong>' . fullname($student) . '</strong>.');
+echo html_writer::tag('p', 'Toute note non validée précédente pour cet étudiant sera remplacée.');
 
 $confirmurl = new moodle_url('/local/dreamu_ai/regrade.php', [
     'id' => $cmid,
@@ -125,5 +125,5 @@ $confirmurl = new moodle_url('/local/dreamu_ai/regrade.php', [
 ]);
 $cancelurl = new moodle_url('/local/dreamu_ai/validate.php', ['id' => $cmid]);
 
-echo $OUTPUT->confirm('Re-grade ' . fullname($student) . ' with AI?', $confirmurl, $cancelurl);
+echo $OUTPUT->confirm('Re-corriger ' . fullname($student) . ' avec l\'IA ?', $confirmurl, $cancelurl);
 echo $OUTPUT->footer();
