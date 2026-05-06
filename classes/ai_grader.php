@@ -16,6 +16,7 @@
 
 /**
  * AI Grader — calls vLLM to grade a single submission.
+ * Supports any language/content type with auto-detection.
  *
  * @package    local_dreamu_ai
  * @copyright  2026 Dream-U / AMU / IUT Aix-en-Provence
@@ -39,6 +40,12 @@ class ai_grader {
 
     private string $deepseek_endpoint;
 
+    /** @var string Vision model endpoint for PDF reading */
+    private string $vision_endpoint;
+
+    /** @var string Vision model name */
+    private string $vision_model;
+
     public function __construct() {
         $this->endpoint = get_config('local_dreamu_ai', 'api_endpoint')
             ?: 'http://100.76.166.71:8102/v1/chat/completions';
@@ -47,6 +54,75 @@ class ai_grader {
         // DeepSeek endpoint for dual grading
         $base = str_replace('/v1/chat/completions', '', $this->endpoint);
         $this->deepseek_endpoint = $base . '/v1/chat/completions';
+        // Vision model endpoint for PDF reading
+        $this->vision_endpoint = 'http://100.76.166.71:8105/v1/chat/completions';
+        $this->vision_model = 'vision-lite';
+    }
+
+    /**
+     * Detect the dominant language/content type from submission text.
+     *
+     * Scans for "--- File: xxx.ext ---" patterns and determines the dominant language.
+     * Returns a human-readable label like "Python", "Java", "C++", etc.
+     *
+     * @param string $submissiontext The submission content
+     * @return string The detected language/type label
+     */
+    private function detect_content_type(string $submissiontext): string {
+        $ext_to_lang = [
+            'py' => 'Python',
+            'java' => 'Java',
+            'c' => 'C',
+            'cpp' => 'C++',
+            'h' => 'C/C++',
+            'hpp' => 'C++',
+            'cs' => 'C#',
+            'js' => 'JavaScript',
+            'ts' => 'TypeScript',
+            'html' => 'HTML',
+            'css' => 'CSS',
+            'php' => 'PHP',
+            'rb' => 'Ruby',
+            'go' => 'Go',
+            'rs' => 'Rust',
+            'sql' => 'SQL',
+            'sh' => 'Shell/Bash',
+            'bash' => 'Shell/Bash',
+            'r' => 'R',
+            'R' => 'R',
+            'tex' => 'LaTeX',
+            'ipynb' => 'Jupyter/Python',
+            'json' => 'JSON',
+            'xml' => 'XML',
+            'yaml' => 'YAML',
+            'yml' => 'YAML',
+            'toml' => 'TOML',
+            'md' => 'Markdown',
+            'txt' => 'Text',
+            'csv' => 'CSV',
+            'ini' => 'INI',
+        ];
+
+        // Find all file extensions in "--- File: xxx.ext ---" patterns
+        $counts = [];
+        if (preg_match_all('/--- File(?:\s*\(in zip\))?: .+\.(\w+) ---/', $submissiontext, $matches)) {
+            foreach ($matches[1] as $ext) {
+                $ext_lower = strtolower($ext);
+                $lang = $ext_to_lang[$ext_lower] ?? strtoupper($ext_lower);
+                if (!isset($counts[$lang])) {
+                    $counts[$lang] = 0;
+                }
+                $counts[$lang]++;
+            }
+        }
+
+        if (empty($counts)) {
+            return 'text/essay';
+        }
+
+        // Return the dominant language
+        arsort($counts);
+        return array_key_first($counts);
     }
 
     /**
@@ -59,7 +135,7 @@ class ai_grader {
      * @return object Object with ->grade (float) and ->feedback (string)
      * @throws \moodle_exception If the API call fails or response is unparseable
      */
-        public function grade_submission(string $submissiontext, string $prompt, float $maxgrade, string $language = 'fr'): object {
+    public function grade_submission(string $submissiontext, string $prompt, float $maxgrade, string $language = 'fr'): object {
         $langname = ($language === 'fr') ? 'French' : 'English';
 
         $maxchars = 30000;
@@ -67,10 +143,30 @@ class ai_grader {
             $submissiontext = substr($submissiontext, 0, $maxchars);
         }
 
+        // Auto-detect the content type / programming language
+        $contenttype = $this->detect_content_type($submissiontext);
+        $is_code = !in_array($contenttype, ['text/essay', 'Markdown', 'Text', 'CSV', 'LaTeX']);
+
+        if ($is_code) {
+            $type_label = $contenttype . " code";
+            $review_focus = "1. Cite SPECIFIC function/class names and explain issues\n"
+                . "2. Point out SPECIFIC bugs with variable names and logic errors\n"
+                . "3. Comment on code style, missing comments, poor structure\n"
+                . "4. Check error handling for edge cases\n"
+                . "5. Check for compilation/syntax errors";
+        } else {
+            $type_label = "written submission";
+            $review_focus = "1. Evaluate the clarity and coherence of the arguments\n"
+                . "2. Check for factual accuracy and depth of analysis\n"
+                . "3. Assess the structure and organization\n"
+                . "4. Note grammar, spelling, and formatting issues\n"
+                . "5. Evaluate whether the prompt/requirements are fully addressed";
+        }
+
         // === PASS 1 (Qwen): Read and understand ===
-        $system1 = "You are a code reviewer. Read the student submission carefully. "
-            . "List ALL files found, describe what each file/function does in 2-3 sentences. "
-            . "Identify the main algorithms implemented. Respond in {$langname}.";
+        $system1 = "You are a {$contenttype} reviewer. Read the student submission carefully. "
+            . "List ALL files/sections found, describe what each file/function/section does in 2-3 sentences. "
+            . "Identify the main concepts, algorithms, or arguments presented. Respond in {$langname}.";
 
         try {
             $analysis = $this->call_api($system1, "Student submission:\n\n{$submissiontext}");
@@ -79,15 +175,11 @@ class ai_grader {
         }
 
         // === PASS 2 (Qwen): Detailed review ===
-        $system2 = "You are an expert C++ code reviewer. Perform a DETAILED review. You MUST:\n"
-            . "1. Cite SPECIFIC function names and explain issues\n"
-            . "2. Point out SPECIFIC bugs with variable names\n"
-            . "3. Comment on code style, missing comments, poor structure\n"
-            . "4. Check error handling for edge cases\n"
-            . "5. Check compilation errors\n"
+        $system2 = "You are an expert {$contenttype} reviewer. Perform a DETAILED review of this {$type_label}. You MUST:\n"
+            . "{$review_focus}\n"
             . "Be VERY specific. Respond in {$langname}.";
 
-        $user2 = "Analysis:\n{$analysis}\n\nCriteria:\n{$prompt}\n\nCode:\n{$submissiontext}";
+        $user2 = "Analysis:\n{$analysis}\n\nCriteria:\n{$prompt}\n\nSubmission:\n{$submissiontext}";
         if (strlen($user2) > 28000) {
             $user2 = substr($user2, 0, 28000) . "\n[... truncated ...]";
         }
@@ -98,28 +190,37 @@ class ai_grader {
             $qwen_review = "Review failed: " . $e->getMessage();
         }
 
-        // === PASS 3 (Qwen): Grade ===
-        $system3 = "Based on your review, give a grade in JSON: {\"grade\": NUMBER, \"feedback\": \"TEXT\"}\n"
+        // === PASS 3 (Qwen): Grade with structured feedback ===
+        $system3 = "Based on your review, give a grade in JSON with this EXACT format:\n"
+            . "{\"grade\": NUMBER, \"points_forts\": [\"point 1\", \"point 2\"], \"erreurs\": [\"error 1\", \"error 2\"], \"suggestions\": [\"suggestion 1\", \"suggestion 2\"], \"commentaire\": \"overall comment\"}\n"
             . "Grade 0-{$maxgrade}. Use FULL range: 0-5 very bad, 6-8 poor, 9-11 average, 12-14 good, 15-17 very good, 18-{$maxgrade} excellent.\n"
-            . "Feedback MUST cite specific functions and issues. In {$langname}. At least 5 sentences.";
+            . "Each array must have at least 2 items. Be specific, cite concrete elements from the submission. In {$langname}.\n"
+            . "RESPOND ONLY WITH THE JSON, no extra text.";
 
         try {
             $qwen_response = $this->call_api($system3, "Criteria:\n{$prompt}\n\nMax: {$maxgrade}\n\nReview:\n{$qwen_review}\n\nJSON:");
-            $qwen_result = $this->parse_response($qwen_response, $maxgrade);
+            $qwen_result = $this->parse_structured_response($qwen_response, $maxgrade);
         } catch (\Exception $e) {
-            $qwen_result = (object)['grade' => $maxgrade * 0.5, 'feedback' => 'Qwen grading failed: ' . $e->getMessage()];
+            $qwen_result = (object)[
+                'grade' => $maxgrade * 0.5,
+                'feedback' => 'Qwen grading failed: ' . $e->getMessage(),
+                'points_forts' => [],
+                'erreurs' => [],
+                'suggestions' => [],
+                'commentaire' => 'Qwen grading failed: ' . $e->getMessage(),
+            ];
         }
 
         // === PASS 4 (DeepSeek): Independent counter-review and grade ===
-        $ds_system = "You are a strict C++ professor. A student submitted code and another AI gave a review. "
-            . "Read the code yourself and give YOUR OWN independent grade. "
-            . "You may DISAGREE with the first review. Be stricter on real bugs and missing features. "
+        $ds_system = "You are a strict {$contenttype} professor. A student submitted work and another AI gave a review. "
+            . "Read the submission yourself and give YOUR OWN independent grade. "
+            . "You may DISAGREE with the first review. Be stricter on real errors and missing requirements. "
             . "Respond ONLY in JSON: {\"grade\": NUMBER, \"feedback\": \"TEXT\"}\n"
-            . "Grade 0-{$maxgrade}. Use FULL range. Feedback in {$langname}. Cite specific functions.";
+            . "Grade 0-{$maxgrade}. Use FULL range. Feedback in {$langname}. Cite specific elements.";
 
         $ds_user = "Criteria:\n{$prompt}\n\nMax: {$maxgrade}\n\nFirst AI review:\n" . substr($qwen_review, 0, 3000)
             . "\n\nFirst AI grade: " . $qwen_result->grade . "/{$maxgrade}"
-            . "\n\nStudent code:\n" . substr($submissiontext, 0, 8000) . "\n\nYour independent JSON grade:";
+            . "\n\nStudent submission:\n" . substr($submissiontext, 0, 8000) . "\n\nYour independent JSON grade:";
 
         try {
             $ds_response = $this->call_deepseek($ds_system, $ds_user);
@@ -129,18 +230,129 @@ class ai_grader {
             $ds_result = (object)['grade' => $qwen_result->grade, 'feedback' => 'DeepSeek review unavailable'];
         }
 
-        // === FINAL: Average both grades ===
+        // === FINAL: Average both grades and build structured HTML feedback ===
         $final_grade = round(($qwen_result->grade + $ds_result->grade) / 2, 2);
         $final_grade = max(0, min($maxgrade, $final_grade));
 
-        $final_feedback = "**Note Qwen: " . $qwen_result->grade . "/{$maxgrade}** - " . substr($qwen_result->feedback, 0, 300)
-            . "\n\n**Note DeepSeek: " . $ds_result->grade . "/{$maxgrade}** - " . substr($ds_result->feedback, 0, 300)
-            . "\n\n**Note finale (moyenne): {$final_grade}/{$maxgrade}**"
-            . "\n\n--- Analyse detaillee ---\n" . $qwen_review;
+        $final_feedback = $this->build_html_feedback(
+            $qwen_result,
+            $ds_result,
+            $qwen_review,
+            $final_grade,
+            $maxgrade,
+            $contenttype
+        );
 
         $result = new \stdClass();
         $result->grade = $final_grade;
         $result->feedback = $final_feedback;
+
+        return $result;
+    }
+
+    /**
+     * Build structured HTML feedback with colored sections.
+     */
+    private function build_html_feedback(object $qwen, object $ds, string $detailed_review, float $final_grade, float $maxgrade, string $contenttype): string {
+        $html = '<div style="font-family: sans-serif; max-width: 800px;">';
+
+        // Header with grade summary
+        $grade_pct = ($maxgrade > 0) ? ($final_grade / $maxgrade) * 100 : 0;
+        if ($grade_pct >= 70) {
+            $grade_color = '#28a745';
+        } elseif ($grade_pct >= 50) {
+            $grade_color = '#ffc107';
+        } else {
+            $grade_color = '#dc3545';
+        }
+
+        $html .= '<div style="background: ' . $grade_color . '22; border-left: 4px solid ' . $grade_color . '; padding: 12px 16px; margin-bottom: 16px; border-radius: 4px;">';
+        $html .= '<strong style="font-size: 1.2em;">Note finale (moyenne) : ' . $final_grade . '/' . $maxgrade . '</strong>';
+        $html .= '<br><small>Qwen : ' . $qwen->grade . '/' . $maxgrade . ' | DeepSeek : ' . $ds->grade . '/' . $maxgrade . '</small>';
+        $html .= '<br><small>Type detecte : ' . htmlspecialchars($contenttype) . '</small>';
+        $html .= '</div>';
+
+        // Points forts (green)
+        if (!empty($qwen->points_forts)) {
+            $html .= '<div style="background: #d4edda; border-left: 4px solid #28a745; padding: 10px 14px; margin-bottom: 12px; border-radius: 4px;">';
+            $html .= '<strong style="color: #155724;">Points forts</strong><ul style="margin: 6px 0 0 0; padding-left: 20px;">';
+            foreach ($qwen->points_forts as $point) {
+                $html .= '<li>' . htmlspecialchars($point) . '</li>';
+            }
+            $html .= '</ul></div>';
+        }
+
+        // Erreurs (red)
+        if (!empty($qwen->erreurs)) {
+            $html .= '<div style="background: #f8d7da; border-left: 4px solid #dc3545; padding: 10px 14px; margin-bottom: 12px; border-radius: 4px;">';
+            $html .= '<strong style="color: #721c24;">Erreurs</strong><ul style="margin: 6px 0 0 0; padding-left: 20px;">';
+            foreach ($qwen->erreurs as $err) {
+                $html .= '<li>' . htmlspecialchars($err) . '</li>';
+            }
+            $html .= '</ul></div>';
+        }
+
+        // Suggestions (blue)
+        if (!empty($qwen->suggestions)) {
+            $html .= '<div style="background: #d1ecf1; border-left: 4px solid #17a2b8; padding: 10px 14px; margin-bottom: 12px; border-radius: 4px;">';
+            $html .= '<strong style="color: #0c5460;">Suggestions</strong><ul style="margin: 6px 0 0 0; padding-left: 20px;">';
+            foreach ($qwen->suggestions as $sug) {
+                $html .= '<li>' . htmlspecialchars($sug) . '</li>';
+            }
+            $html .= '</ul></div>';
+        }
+
+        // Overall comment
+        if (!empty($qwen->commentaire)) {
+            $html .= '<div style="background: #f5f5f5; border-left: 4px solid #6c757d; padding: 10px 14px; margin-bottom: 12px; border-radius: 4px;">';
+            $html .= '<strong>Commentaire general</strong><br>' . htmlspecialchars($qwen->commentaire);
+            $html .= '</div>';
+        }
+
+        // DeepSeek feedback
+        if (!empty($ds->feedback) && $ds->feedback !== 'DeepSeek review unavailable') {
+            $html .= '<div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 10px 14px; margin-bottom: 12px; border-radius: 4px;">';
+            $html .= '<strong style="color: #856404;">Contre-evaluation (DeepSeek)</strong><br>';
+            $html .= htmlspecialchars(substr($ds->feedback, 0, 500));
+            $html .= '</div>';
+        }
+
+        // Detailed analysis (collapsible)
+        $html .= '<details style="margin-top: 12px;"><summary style="cursor: pointer; font-weight: bold; padding: 8px; background: #e9ecef; border-radius: 4px;">Analyse detaillee (cliquer pour ouvrir)</summary>';
+        $html .= '<div style="padding: 12px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 0 0 4px 4px; white-space: pre-wrap; font-size: 0.9em;">';
+        $html .= htmlspecialchars($detailed_review);
+        $html .= '</div></details>';
+
+        $html .= '</div>';
+        return $html;
+    }
+
+    /**
+     * Parse structured JSON response (Pass 3 format with points_forts, erreurs, suggestions).
+     */
+    private function parse_structured_response(string $response, float $maxgrade): object {
+        // Try to extract JSON from the response
+        $json = $response;
+        if (preg_match('/```(?:json)?\s*(\{.+\})\s*```/s', $response, $matches)) {
+            $json = $matches[1];
+        } elseif (preg_match('/(\{.*"grade".*\})/s', $response, $matches)) {
+            $json = $matches[1];
+        }
+
+        $data = json_decode($json);
+        if (!$data || !isset($data->grade)) {
+            throw new \moodle_exception('parse_error', 'local_dreamu_ai', '', null,
+                "Could not parse AI response as JSON: {$response}");
+        }
+
+        $result = new \stdClass();
+        $result->grade = max(0, min($maxgrade, floatval($data->grade)));
+        $result->points_forts = isset($data->points_forts) && is_array($data->points_forts) ? $data->points_forts : [];
+        $result->erreurs = isset($data->erreurs) && is_array($data->erreurs) ? $data->erreurs : [];
+        $result->suggestions = isset($data->suggestions) && is_array($data->suggestions) ? $data->suggestions : [];
+        $result->commentaire = isset($data->commentaire) ? (string)$data->commentaire : '';
+        // Also set feedback for compatibility
+        $result->feedback = $result->commentaire;
 
         return $result;
     }
@@ -260,6 +472,74 @@ class ai_grader {
     }
 
     /**
+     * Call the Vision model API to extract text from a PDF image/page.
+     *
+     * @param string $base64content Base64-encoded PDF content
+     * @param string $filename Original filename for context
+     * @return string Extracted text
+     */
+    private function call_vision_for_pdf(string $base64content, string $filename): string {
+        $payload = json_encode([
+            'model' => $this->vision_model,
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' => 'You are a document text extractor. Extract ALL text content from this PDF document. '
+                        . 'Preserve the structure, headings, and formatting as much as possible. '
+                        . 'Output only the extracted text, nothing else.',
+                ],
+                [
+                    'role' => 'user',
+                    'content' => [
+                        [
+                            'type' => 'image_url',
+                            'image_url' => [
+                                'url' => 'data:application/pdf;base64,' . $base64content,
+                            ],
+                        ],
+                        [
+                            'type' => 'text',
+                            'text' => "Extract all text from this PDF file: {$filename}",
+                        ],
+                    ],
+                ],
+            ],
+            'temperature' => 0.1,
+            'max_tokens' => 4000,
+        ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+
+        if ($payload === false) {
+            throw new \Exception('Failed to encode vision API payload');
+        }
+
+        $ch = curl_init($this->vision_endpoint);
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $payload,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $this->apikey,
+            ],
+            CURLOPT_TIMEOUT => 120,
+            CURLOPT_CONNECTTIMEOUT => 30,
+        ]);
+
+        $response = curl_exec($ch);
+        $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($response === false || $httpcode !== 200) {
+            throw new \Exception("Vision API HTTP {$httpcode}");
+        }
+
+        $decoded = json_decode($response, true);
+        $content = $decoded['choices'][0]['message']['content'] ?? '';
+
+        return trim($content);
+    }
+
+    /**
      * Parse the AI response into a grade and feedback.
      *
      * @param string $response Raw text from the AI
@@ -311,6 +591,7 @@ class ai_grader {
 
     /**
      * Get the text content of a submission (online text + file contents).
+     * Supports text files, ZIP archives, and PDF files (via Vision API).
      *
      * @param \assign $assign The assignment instance
      * @param \stdClass $submission The submission record
@@ -366,6 +647,26 @@ class ai_grader {
                 if (in_array(strtolower($extension), $textextensions)) {
                     $content = $file->get_content();
                     $text .= "--- File: {$filename} ---\n{$content}\n\n";
+                } elseif (strtolower($extension) === 'pdf') {
+                    // Try to extract text from PDF via Vision model API
+                    try {
+                        $pdfcontent = $file->get_content();
+                        $base64 = base64_encode($pdfcontent);
+                        // Limit to ~10MB base64 to avoid API overload
+                        if (strlen($base64) > 10 * 1024 * 1024) {
+                            $text .= "--- File: {$filename} (PDF too large for vision extraction, {$file->get_filesize()} bytes) ---\n\n";
+                        } else {
+                            $grader = new self();
+                            $extracted = $grader->call_vision_for_pdf($base64, $filename);
+                            if (!empty(trim($extracted))) {
+                                $text .= "--- File: {$filename} (PDF, extracted via Vision) ---\n{$extracted}\n\n";
+                            } else {
+                                $text .= "--- File: {$filename} (PDF file, vision returned empty) ---\n\n";
+                            }
+                        }
+                    } catch (\Exception $e) {
+                        $text .= "--- File: {$filename} (PDF file, cannot read: " . $e->getMessage() . ") ---\n\n";
+                    }
                 } elseif (strtolower($extension) === 'zip') {
                     // Extract ZIP and read text files inside
                     $tmpdir = make_temp_directory('dreamu_ai_zip_' . $submission->id);

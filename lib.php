@@ -121,6 +121,17 @@ function local_dreamu_ai_extend_settings_navigation(settings_navigation $setting
         'dreamu_ai_import',
         new pix_icon('i/upload', '')
     );
+
+    // Add "Plagiarism Detection" link.
+    $plagiarismurl = new moodle_url('/local/dreamu_ai/plagiarism.php', ['id' => $cm->id]);
+    $assignnode->add(
+        'Détection de plagiat',
+        $plagiarismurl,
+        navigation_node::TYPE_SETTING,
+        null,
+        'dreamu_ai_plagiarism',
+        new pix_icon('i/risk_spam', '')
+    );
 }
 
 /**
@@ -221,4 +232,25 @@ function local_dreamu_ai_coursemodule_edit_post_actions($data, $course) {
     }
 
     return $data;
+}
+
+/**
+ * Add AI Dashboard link to course navigation.
+ *
+ * @param navigation_node $navigation
+ * @param stdClass $course
+ * @param context_course $context
+ */
+function local_dreamu_ai_extend_navigation_course($navigation, $course, $context) {
+    if (has_capability('local/dreamu_ai:grade', $context)) {
+        $url = new moodle_url('/local/dreamu_ai/dashboard.php', ['courseid' => $course->id]);
+        $navigation->add(
+            'Dashboard IA',
+            $url,
+            navigation_node::TYPE_CUSTOM,
+            null,
+            'dreamu_ai_dashboard',
+            new pix_icon('i/report', '')
+        );
+    }
 }

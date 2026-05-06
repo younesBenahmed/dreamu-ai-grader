@@ -42,7 +42,13 @@ class grade_submissions extends \core\task\adhoc_task {
         $assignid = $data->assignid;
         $teacherid = $data->teacherid;
 
+        // Get selected user IDs if provided (backward compatible: if not set, grade all).
+        $selecteduserids = isset($data->userids) ? (array)$data->userids : null;
+
         mtrace("Dream-U AI Grader: Starting grading for assignment {$assignid}");
+        if ($selecteduserids !== null) {
+            mtrace("  Grading selected students only: " . count($selecteduserids) . " user(s)");
+        }
 
         // Load the assignment.
         $cm = get_coursemodule_from_instance('assign', $assignid, 0, false, MUST_EXIST);
@@ -76,8 +82,37 @@ class grade_submissions extends \core\task\adhoc_task {
             return;
         }
 
+        // Filter by selected user IDs if provided.
+        if ($selecteduserids !== null) {
+            $selecteduserids_map = array_flip($selecteduserids);
+            $submissions = array_filter($submissions, function($sub) use ($selecteduserids_map) {
+                return isset($selecteduserids_map[$sub->userid]);
+            });
+            if (empty($submissions)) {
+                mtrace("  No submissions match the selected students.");
+                return;
+            }
+        }
+
         mtrace("  Found " . count($submissions) . " submissions to grade.");
-// Clean up old pending (non-validated) grades before re-grading        $old_pending = $DB->delete_records_select(            "local_dreamu_ai_grades",            "assignid = :assignid AND validated = 0",            ["assignid" => $assignid]        );        if ($old_pending) {            mtrace("  Cleaned up " . $old_pending . " old pending grades.");        }
+
+        // Clean up old pending (non-validated) grades before re-grading.
+        // Only clean grades for the users we are about to grade.
+        if ($selecteduserids !== null) {
+            list($insql, $inparams) = $DB->get_in_or_equal($selecteduserids, SQL_PARAMS_NAMED);
+            $inparams['assignid'] = $assignid;
+            $DB->delete_records_select(
+                "local_dreamu_ai_grades",
+                "assignid = :assignid AND validated = 0 AND userid {$insql}",
+                $inparams
+            );
+        } else {
+            $DB->delete_records_select(
+                "local_dreamu_ai_grades",
+                "assignid = :assignid AND validated = 0",
+                ["assignid" => $assignid]
+            );
+        }
 
         $grader = new \local_dreamu_ai\ai_grader();
         $graded = 0;

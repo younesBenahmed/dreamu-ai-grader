@@ -145,6 +145,128 @@ foreach ($records as $record) {
 echo html_writer::table($table);
 echo '</div></div>';
 
+// --- Calibration section: compare AI grades with manual grades ---
+$manualgrades = $DB->get_records_sql(
+    "SELECT ag.userid, ag.grade AS manualgrade
+       FROM {assign_grades} ag
+      WHERE ag.assignment = :assignid
+        AND ag.grade >= 0
+        AND ag.attemptnumber = (
+            SELECT MAX(ag2.attemptnumber)
+              FROM {assign_grades} ag2
+             WHERE ag2.assignment = ag.assignment AND ag2.userid = ag.userid
+        )",
+    ['assignid' => $cm->instance]
+);
+
+if (!empty($manualgrades)) {
+    // Build lookup of AI grades by userid.
+    $aigrades_by_user = [];
+    foreach ($records as $record) {
+        $aigrades_by_user[$record->userid] = floatval($record->grade);
+    }
+
+    // Find users with both manual and AI grades.
+    $calibrationrows = [];
+    $diffs = [];
+    $ai_vals = [];
+    $manual_vals = [];
+
+    foreach ($manualgrades as $mg) {
+        if (isset($aigrades_by_user[$mg->userid])) {
+            $aigrade = $aigrades_by_user[$mg->userid];
+            $manualgrade = floatval($mg->manualgrade);
+            $diff = $aigrade - $manualgrade;
+
+            $user = $DB->get_record('user', ['id' => $mg->userid]);
+            if (!$user) continue;
+
+            $calibrationrows[] = [
+                'name' => fullname($user),
+                'aigrade' => $aigrade,
+                'manualgrade' => $manualgrade,
+                'diff' => $diff,
+            ];
+
+            $diffs[] = $diff;
+            $ai_vals[] = $aigrade;
+            $manual_vals[] = $manualgrade;
+        }
+    }
+
+    if (!empty($calibrationrows)) {
+        echo '<div class="card mb-4"><div class="card-body">';
+        echo '<h4>Calibration : IA vs Notes manuelles</h4>';
+
+        $caltable = new html_table();
+        $caltable->head = ['Étudiant', 'Note IA', 'Note manuelle', 'Différence'];
+        $caltable->attributes['class'] = 'generaltable';
+
+        foreach ($calibrationrows as $row) {
+            $diffcolor = abs($row['diff']) <= 1 ? 'text-success' : (abs($row['diff']) <= 3 ? 'text-warning' : 'text-danger');
+            $diffsign = $row['diff'] >= 0 ? '+' : '';
+
+            $caltable->data[] = [
+                $row['name'],
+                number_format($row['aigrade'], 2) . ' / ' . $maxgrade,
+                number_format($row['manualgrade'], 2) . ' / ' . $maxgrade,
+                '<strong class="' . $diffcolor . '">' . $diffsign . number_format($row['diff'], 2) . '</strong>',
+            ];
+        }
+
+        echo html_writer::table($caltable);
+
+        // Calculate average difference.
+        $avgdiff = array_sum($diffs) / count($diffs);
+        $absdiffs = array_map('abs', $diffs);
+        $avgabsdiff = array_sum($absdiffs) / count($absdiffs);
+
+        // Calculate Pearson correlation.
+        $n = count($ai_vals);
+        $correlation = 0;
+        if ($n >= 2) {
+            $mean_ai = array_sum($ai_vals) / $n;
+            $mean_manual = array_sum($manual_vals) / $n;
+
+            $num = 0;
+            $den_ai = 0;
+            $den_manual = 0;
+            for ($i = 0; $i < $n; $i++) {
+                $da = $ai_vals[$i] - $mean_ai;
+                $dm = $manual_vals[$i] - $mean_manual;
+                $num += $da * $dm;
+                $den_ai += $da * $da;
+                $den_manual += $dm * $dm;
+            }
+
+            $denom = sqrt($den_ai) * sqrt($den_manual);
+            if ($denom > 0) {
+                $correlation = $num / $denom;
+            }
+        }
+
+        echo '<div class="row mt-3">';
+        $calstats = [
+            ['Paires comparées', $n, 'secondary'],
+            ['Diff. moyenne', ($avgdiff >= 0 ? '+' : '') . number_format($avgdiff, 2), 'info'],
+            ['Diff. abs. moyenne', number_format($avgabsdiff, 2), 'warning'],
+            ['Corrélation (Pearson)', number_format($correlation, 3), $correlation >= 0.7 ? 'success' : ($correlation >= 0.4 ? 'warning' : 'danger')],
+        ];
+
+        foreach ($calstats as [$label, $value, $color]) {
+            echo '<div class="col-md-3">';
+            echo '<div class="card text-white bg-' . $color . ' mb-3">';
+            echo '<div class="card-body text-center">';
+            echo '<h5 class="card-title">' . $value . '</h5>';
+            echo '<p class="card-text">' . $label . '</p>';
+            echo '</div></div></div>';
+        }
+        echo '</div>';
+
+        echo '</div></div>';
+    }
+}
+
 // Export CSV button.
 $csvurl = new moodle_url('/local/dreamu_ai/export_csv.php', ['id' => $cmid]);
 echo '<a href="' . $csvurl . '" class="btn btn-outline-primary mr-2">Export CSV</a>';
