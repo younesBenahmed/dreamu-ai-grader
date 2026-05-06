@@ -98,7 +98,7 @@ echo '
 
             <div id="spinner" style="margin:20px 0;">
                 <div class="spinner-border text-success" role="status" style="width:2rem; height:2rem;">
-                    <span class="sr-only">Loading...</span>
+                    <span class="sr-only">Chargement...</span>
                 </div>
             </div>
 

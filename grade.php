@@ -16,7 +16,7 @@ $assign = new assign($context, $cm, $course);
 $config = $DB->get_record('local_dreamu_ai_config', ['assignid' => $cm->instance]);
 
 if (!$config || !$config->enabled) {
-    throw new moodle_exception('La correction IA n\'est pas activee pour ce devoir.');
+    throw new moodle_exception('La correction IA n\'est pas activée pour ce devoir.');
 }
 
 $PAGE->set_url(new moodle_url('/local/dreamu_ai/grade.php', ['id' => $cmid]));
@@ -30,7 +30,7 @@ if ($confirm && confirm_sesskey()) {
     if (empty($selecteduserids)) {
         redirect(
             new moodle_url('/local/dreamu_ai/grade.php', ['id' => $cmid]),
-            'Aucun etudiant selectionne.',
+            'Aucun étudiant sélectionné.',
             null,
             \core\output\notification::NOTIFY_WARNING
         );
@@ -84,15 +84,15 @@ $submissions = $DB->get_records('assign_submission', [
 
 $submissioncount = count($submissions);
 $maxgrade = floatval($assign->get_instance()->grade);
-$langmap = ['fr' => 'Francais', 'en' => 'Anglais'];
+$langmap = ['fr' => 'Français', 'en' => 'Anglais'];
 
 echo '<div class="card mb-3"><div class="card-body">';
 echo '<h4>' . format_string($assign->get_instance()->name) . '</h4>';
 echo '<table class="table table-sm" style="max-width:400px;">';
-echo '<tr><td>Soumissions a corriger</td><td><strong>' . $submissioncount . '</strong></td></tr>';
+echo '<tr><td>Soumissions à corriger</td><td><strong>' . $submissioncount . '</strong></td></tr>';
 echo '<tr><td>Note maximale</td><td><strong>' . $maxgrade . '</strong></td></tr>';
 echo '<tr><td>Langue du feedback</td><td><strong>' . ($langmap[$config->language] ?? $config->language) . '</strong></td></tr>';
-echo '<tr><td>Temps estime</td><td><strong>~' . ($submissioncount * 2) . ' minutes</strong></td></tr>';
+echo '<tr><td>Temps estimé</td><td><strong>~' . ($submissioncount * 2) . ' minutes</strong></td></tr>';
 echo '</table>';
 
 if (!empty($config->prompt)) {
@@ -111,12 +111,12 @@ echo '<input type="hidden" name="sesskey" value="' . sesskey() . '">';
 
 // Student selection section
 echo '<div class="card mb-3"><div class="card-body">';
-echo '<h5>Selection des etudiants</h5>';
+echo '<h5>Sélection des étudiants</h5>';
 
 // Select All / Deselect All toggle
 echo '<div class="mb-2">';
-echo '<button type="button" id="btn-select-all" class="btn btn-sm btn-outline-primary mr-2" onclick="toggleAllStudents(true)">Tout selectionner</button>';
-echo '<button type="button" id="btn-deselect-all" class="btn btn-sm btn-outline-secondary" onclick="toggleAllStudents(false)">Tout deselectionner</button>';
+echo '<button type="button" id="btn-select-all" class="btn btn-sm btn-outline-primary mr-2" onclick="toggleAllStudents(true)">Tout sélectionner</button>';
+echo '<button type="button" id="btn-deselect-all" class="btn btn-sm btn-outline-secondary" onclick="toggleAllStudents(false)">Tout désélectionner</button>';
 echo '<span id="selected-count" class="ml-3 text-muted"></span>';
 echo '</div>';
 
@@ -148,7 +148,7 @@ if (!empty($submissions)) {
             ]);
             $badge = '';
             if ($existing) {
-                $badge = ' <span class="badge badge-warning">Deja note (' . round($existing->grade, 1) . '/' . $maxgrade . ')</span>';
+                $badge = ' <span class="badge badge-warning">Déjà noté (' . round($existing->grade, 1) . '/' . $maxgrade . ')</span>';
             }
 
             echo '<div class="form-check">';
@@ -160,7 +160,7 @@ if (!empty($submissions)) {
         }
     }
 } else {
-    echo '<p class="text-muted mb-0">Aucune soumission trouvee.</p>';
+    echo '<p class="text-muted mb-0">Aucune soumission trouvée.</p>';
 }
 
 echo '</div>'; // end scrollable div
@@ -187,7 +187,7 @@ function updateSelectedCount() {
     var total = document.querySelectorAll(".student-checkbox").length;
     var selected = document.querySelectorAll(".student-checkbox:checked").length;
     var el = document.getElementById("selected-count");
-    if (el) { el.textContent = selected + " / " + total + " selectionne(s)"; }
+    if (el) { el.textContent = selected + " / " + total + " sélectionné(s)"; }
 }
 // Init count and listen for changes
 document.addEventListener("DOMContentLoaded", function() {

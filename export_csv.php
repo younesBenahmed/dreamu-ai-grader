@@ -23,7 +23,7 @@ $records = $DB->get_records('local_dreamu_ai_grades', [
 if (empty($records)) {
     redirect(
         new moodle_url('/local/dreamu_ai/validate.php', ['id' => $cmid]),
-        'No grades to export.',
+        'Aucune note à exporter.',
         null,
         \core\output\notification::NOTIFY_WARNING
     );
@@ -42,12 +42,12 @@ fprintf($output, chr(0xEF) . chr(0xBB) . chr(0xBF));
 
 // Header row.
 fputcsv($output, [
-    'Student',
-    'Username',
+    'Étudiant',
+    'Identifiant',
     'Email',
-    'Grade',
-    'Max Grade',
-    'Status',
+    'Note',
+    'Note maximale',
+    'Statut',
     'Feedback',
     'Date',
 ], ';');
@@ -59,11 +59,11 @@ foreach ($records as $record) {
     }
 
     $statusmap = [
-        'graded' => 'Pending validation',
-        'validated' => 'Validated',
-        'rejected' => 'Rejected',
-        'error' => 'Error',
-        'pending' => 'Processing',
+        'graded' => 'En attente de validation',
+        'validated' => 'Validée',
+        'rejected' => 'Rejetée',
+        'error' => 'Erreur',
+        'pending' => 'En cours',
     ];
 
     // Clean feedback for CSV (remove HTML, limit length).

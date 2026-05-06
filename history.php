@@ -44,10 +44,10 @@ echo $OUTPUT->heading(get_string('ai_grade_history', 'local_dreamu_ai'));
 $records = $DB->get_records('local_dreamu_ai_grades', ['assignid' => $cm->instance], 'timecreated DESC');
 
 if (empty($records)) {
-    echo $OUTPUT->notification('No AI grading history found for this assignment.', 'info');
+    echo $OUTPUT->notification('Aucun historique de correction IA trouvé pour ce devoir.', 'info');
 } else {
     $table = new html_table();
-    $table->head = ['Student', 'Grade', 'Status', 'Feedback', 'Date'];
+    $table->head = ['Étudiant', 'Note', 'Statut', 'Feedback', 'Date'];
     $table->attributes['class'] = 'generaltable';
 
     foreach ($records as $record) {

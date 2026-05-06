@@ -297,9 +297,9 @@ if (!empty($processed)) {
 
     $table = new html_table();
     $table->head = [
-        'Student',
+        'Étudiant',
         'Note',
-        'Status',
+        'Statut',
         'Feedback',
         'Date',
     ];

@@ -103,7 +103,7 @@ function local_dreamu_ai_extend_settings_navigation(settings_navigation $setting
     // Add "AI Statistics" link.
     $statsurl = new moodle_url('/local/dreamu_ai/stats.php', ['id' => $cm->id]);
     $assignnode->add(
-        'AI Statistics',
+        'Statistiques IA',
         $statsurl,
         navigation_node::TYPE_SETTING,
         null,
@@ -114,7 +114,7 @@ function local_dreamu_ai_extend_settings_navigation(settings_navigation $setting
     // Add "Import Submissions" link.
     $importurl = new moodle_url('/local/dreamu_ai/import_submissions.php', ['id' => $cm->id]);
     $assignnode->add(
-        'Import Submissions',
+        'Importer des soumissions',
         $importurl,
         navigation_node::TYPE_SETTING,
         null,

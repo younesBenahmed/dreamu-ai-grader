@@ -16,7 +16,7 @@ $instance = $assign->get_instance();
 
 $PAGE->set_url(new moodle_url('/local/dreamu_ai/import_submissions.php', ['id' => $cmid]));
 $PAGE->set_context($context);
-$PAGE->set_title('Import Submissions - ' . $instance->name);
+$PAGE->set_title('Importer des soumissions - ' . $instance->name);
 $PAGE->set_heading($course->fullname);
 
 // Handle file upload.
@@ -30,7 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && confirm_sesskey()) {
 
         $zip = new ZipArchive();
         if ($zip->open($tmpfile) !== true) {
-            redirect($PAGE->url, 'Error: Could not open ZIP file', null, \core\output\notification::NOTIFY_ERROR);
+            redirect($PAGE->url, 'Erreur : impossible d\'ouvrir le fichier ZIP', null, \core\output\notification::NOTIFY_ERROR);
         }
 
         // Extract to temp dir.
@@ -64,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && confirm_sesskey()) {
         }
 
         if (empty($submissions)) {
-            redirect($PAGE->url, 'No submissions found in ZIP', null, \core\output\notification::NOTIFY_ERROR);
+            redirect($PAGE->url, 'Aucune soumission trouvée dans le ZIP', null, \core\output\notification::NOTIFY_ERROR);
         }
 
         // Process each submission.
@@ -86,7 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && confirm_sesskey()) {
                 $parts = array_values($parts);
 
                 $firstname = ucfirst(strtolower($parts[0] ?? $cleanname));
-                $lastname = ucfirst(strtolower($parts[1] ?? 'Student'));
+                $lastname = ucfirst(strtolower($parts[1] ?? 'Étudiant'));
 
                 $user = new stdClass();
                 $user->username = $cleanname;
@@ -103,7 +103,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && confirm_sesskey()) {
                     $user->id = $DB->insert_record('user', $user);
                     $created_users[] = $user->username;
                 } catch (\Exception $e) {
-                    $errors[] = "Could not create user for '{$sub->name}': " . $e->getMessage();
+                    $errors[] = "Impossible de créer l'utilisateur pour '{$sub->name}' : " . $e->getMessage();
                     continue;
                 }
             }
@@ -190,12 +190,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && confirm_sesskey()) {
         // Cleanup temp dir.
         remove_dir($tmpdir);
 
-        $msg = "{$imported} submissions imported successfully!";
+        $msg = "{$imported} soumissions importées avec succès !";
         if (!empty($created_users)) {
-            $msg .= " Created " . count($created_users) . " new student accounts.";
+            $msg .= " " . count($created_users) . " nouveaux comptes étudiants créés.";
         }
         if (!empty($errors)) {
-            $msg .= " Errors: " . implode('; ', $errors);
+            $msg .= " Erreurs : " . implode('; ', $errors);
         }
 
         redirect(
@@ -203,59 +203,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && confirm_sesskey()) {
             $msg, null, \core\output\notification::NOTIFY_SUCCESS
         );
     } else {
-        redirect($PAGE->url, 'Please select a ZIP file', null, \core\output\notification::NOTIFY_ERROR);
+        redirect($PAGE->url, 'Veuillez sélectionner un fichier ZIP', null, \core\output\notification::NOTIFY_ERROR);
     }
 }
 
 // Display form.
 echo $OUTPUT->header();
 
-echo '<h2>📦 Import Submissions</h2>';
-echo '<p>Upload a ZIP file containing student submissions. Each folder or file inside the ZIP will be treated as one submission.</p>';
+echo '<h2>Importer des soumissions</h2>';
+echo '<p>Téléchargez un fichier ZIP contenant les soumissions des étudiants. Chaque dossier ou fichier dans le ZIP sera traité comme une soumission.</p>';
 
 echo '<div class="card mb-3"><div class="card-body">';
-echo '<h5>Expected ZIP structure:</h5>';
+echo '<h5>Structure ZIP attendue :</h5>';
 echo '<pre style="background:#f4f4f4;padding:15px;border-radius:5px;">';
 echo "submissions.zip\n";
-echo "├── Etudiant1_Nom/          → Creates user 'etudiant1_nom', submits folder as ZIP\n";
+echo "├── Etudiant1_Nom/          → Crée l'utilisateur 'etudiant1_nom', soumet le dossier en ZIP\n";
 echo "│   ├── main.cpp\n";
 echo "│   ├── header.h\n";
 echo "│   └── ...\n";
 echo "├── Etudiant2_Nom/\n";
 echo "│   └── code.cpp\n";
-echo "├── Etudiant3_Nom.zip       → Creates user 'etudiant3_nom', submits the ZIP\n";
+echo "├── Etudiant3_Nom.zip       → Crée l'utilisateur 'etudiant3_nom', soumet le ZIP\n";
 echo "└── ...\n";
 echo '</pre>';
 echo '</div></div>';
 
 echo '<div class="card mb-3"><div class="card-body">';
-echo '<h5>Assignment: <strong>' . format_string($instance->name) . '</strong></h5>';
+echo '<h5>Devoir : <strong>' . format_string($instance->name) . '</strong></h5>';
 
 $subcount = $DB->count_records('assign_submission', ['assignment' => $instance->id, 'status' => 'submitted', 'latest' => 1]);
-echo '<p>Current submissions: <strong>' . $subcount . '</strong></p>';
+echo '<p>Soumissions actuelles : <strong>' . $subcount . '</strong></p>';
 echo '</div></div>';
 
 echo '<form method="post" enctype="multipart/form-data">';
 echo '<input type="hidden" name="sesskey" value="' . sesskey() . '">';
 
 echo '<div class="form-group">';
-echo '<label for="zipfile"><strong>ZIP file with submissions:</strong></label>';
+echo '<label for="zipfile"><strong>Fichier ZIP avec les soumissions :</strong></label>';
 echo '<input type="file" name="zipfile" id="zipfile" accept=".zip" class="form-control-file" required>';
 echo '</div>';
 
 echo '<div class="form-group">';
-echo '<label for="password"><strong>Default password for new students:</strong></label>';
+echo '<label for="password"><strong>Mot de passe par défaut pour les nouveaux étudiants :</strong></label>';
 echo '<input type="text" name="password" id="password" value="Etudiant2026!" class="form-control" style="max-width:300px;">';
-echo '<small class="form-text text-muted">All new student accounts will use this password.</small>';
+echo '<small class="form-text text-muted">Tous les nouveaux comptes étudiants utiliseront ce mot de passe.</small>';
 echo '</div>';
 
 echo '<div class="form-check mb-3">';
 echo '<input class="form-check-input" type="checkbox" name="createusers" value="1" id="createusers" checked>';
-echo '<label class="form-check-label" for="createusers">Create student accounts automatically if they don\'t exist</label>';
+echo '<label class="form-check-label" for="createusers">Créer automatiquement les comptes étudiants s\'ils n\'existent pas</label>';
 echo '</div>';
 
-echo '<button type="submit" class="btn btn-primary btn-lg">📤 Import Submissions</button>';
-echo ' <a href="' . new moodle_url('/mod/assign/view.php', ['id' => $cmid]) . '" class="btn btn-secondary">Cancel</a>';
+echo '<button type="submit" class="btn btn-primary btn-lg">Importer les soumissions</button>';
+echo ' <a href="' . new moodle_url('/mod/assign/view.php', ['id' => $cmid]) . '" class="btn btn-secondary">Annuler</a>';
 echo '</form>';
 
 echo $OUTPUT->footer();
