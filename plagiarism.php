@@ -92,94 +92,48 @@ if (!empty($compare)) {
     }
 }
 
-// Get embeddings for all submissions.
-$embeddings = [];
-$errors = [];
+// Compute n-gram fingerprints for all submissions (no external API needed).
+// Uses Jaccard similarity on 4-grams (sequences of 4 words).
+function get_ngrams(string $text, int $n = 4): array {
+    // Normalize: lowercase, remove comments/headers, split into words.
+    $text = strtolower($text);
+    $text = preg_replace('/---\s*File:.*?---/i', '', $text);
+    $text = preg_replace('/\/\/.*$/m', '', $text);
+    $text = preg_replace('/\/\*.*?\*\//s', '', $text);
+    $text = preg_replace('/[^a-z0-9éèêëàâäùûüôöïîç_]+/u', ' ', $text);
+    $words = preg_split('/\s+/', trim($text));
+    $words = array_filter($words, fn($w) => strlen($w) > 1);
+    $words = array_values($words);
 
+    $ngrams = [];
+    for ($i = 0; $i <= count($words) - $n; $i++) {
+        $ngrams[] = implode(' ', array_slice($words, $i, $n));
+    }
+    return array_unique($ngrams);
+}
+
+function jaccard_similarity(array $a, array $b): float {
+    if (empty($a) && empty($b)) return 0.0;
+    $intersection = count(array_intersect($a, $b));
+    $union = count(array_unique(array_merge($a, $b)));
+    return $union > 0 ? $intersection / $union : 0.0;
+}
+
+// Build n-grams for each submission.
+$ngrams_map = [];
 foreach ($submissiontexts as $userid => $text) {
-    // Truncate to 2000 chars.
-    $truncated = mb_substr($text, 0, 2000);
-
-    $payload = json_encode([
-        'model' => 'embedding',
-        'input' => $truncated,
-    ]);
-
-    $ch = curl_init('http://100.76.166.71:8106/v1/embeddings');
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => $payload,
-        CURLOPT_HTTPHEADER => [
-            'Content-Type: application/json',
-        ],
-        CURLOPT_TIMEOUT => 30,
-    ]);
-
-    $response = curl_exec($ch);
-    $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlerror = curl_error($ch);
-    curl_close($ch);
-
-    if ($response === false || $httpcode !== 200) {
-        $errors[] = "Erreur pour " . s($usernames[$userid]) . ": " . ($curlerror ?: "HTTP {$httpcode}");
-        continue;
-    }
-
-    $data = json_decode($response, true);
-    if (isset($data['data'][0]['embedding'])) {
-        $embeddings[$userid] = $data['data'][0]['embedding'];
-    } else {
-        $errors[] = "Pas d'embedding retourné pour " . s($usernames[$userid]);
-    }
+    $ngrams_map[$userid] = get_ngrams($text, 4);
 }
 
-if (!empty($errors)) {
-    echo '<div class="alert alert-warning">';
-    echo '<strong>Avertissements :</strong><ul>';
-    foreach ($errors as $err) {
-        echo '<li>' . $err . '</li>';
-    }
-    echo '</ul></div>';
-}
-
-if (count($embeddings) < 2) {
-    echo $OUTPUT->notification('Pas assez d\'embeddings obtenus pour comparer.', 'error');
-    echo $OUTPUT->footer();
-    exit;
-}
-
-// Compute cosine similarity for all pairs.
-function cosine_similarity(array $a, array $b): float {
-    $dot = 0.0;
-    $norma = 0.0;
-    $normb = 0.0;
-    $len = min(count($a), count($b));
-
-    for ($i = 0; $i < $len; $i++) {
-        $dot += $a[$i] * $b[$i];
-        $norma += $a[$i] * $a[$i];
-        $normb += $b[$i] * $b[$i];
-    }
-
-    $norma = sqrt($norma);
-    $normb = sqrt($normb);
-
-    if ($norma == 0 || $normb == 0) {
-        return 0.0;
-    }
-
-    return $dot / ($norma * $normb);
-}
-
+// Compute similarity for all pairs.
 $pairs = [];
-$userids = array_keys($embeddings);
+$userids = array_keys($ngrams_map);
 
 for ($i = 0; $i < count($userids); $i++) {
     for ($j = $i + 1; $j < count($userids); $j++) {
         $uid1 = $userids[$i];
         $uid2 = $userids[$j];
-        $similarity = cosine_similarity($embeddings[$uid1], $embeddings[$uid2]);
+        $similarity = jaccard_similarity($ngrams_map[$uid1], $ngrams_map[$uid2]);
         $pairs[] = [
             'user1' => $uid1,
             'user2' => $uid2,
@@ -206,11 +160,11 @@ echo '</tr></thead><tbody>';
 foreach ($pairs as $pair) {
     $pct = round($pair['similarity'] * 100, 1);
 
-    // Determine row color.
+    // Determine row color (Jaccard thresholds are lower than cosine).
     $rowclass = '';
-    if ($pair['similarity'] >= 0.85) {
+    if ($pair['similarity'] >= 0.40) {
         $rowclass = 'table-danger';
-    } elseif ($pair['similarity'] >= 0.70) {
+    } elseif ($pair['similarity'] >= 0.25) {
         $rowclass = 'table-warning';
     }
 
@@ -232,9 +186,9 @@ echo '</div></div>';
 
 // Legend.
 echo '<div class="mb-3">';
-echo '<span class="badge bg-danger text-white p-2 mr-2">Rouge : >= 85% similarité</span> ';
-echo '<span class="badge bg-warning text-dark p-2 mr-2">Orange : 70-85% similarité</span> ';
-echo '<span class="badge bg-light text-dark border p-2">Normal : < 70%</span>';
+echo '<span class="badge bg-danger text-white p-2 mr-2">Rouge : >= 40% (plagiat probable)</span> ';
+echo '<span class="badge bg-warning text-dark p-2 mr-2">Orange : 25-40% (suspect)</span> ';
+echo '<span class="badge bg-light text-dark border p-2">Normal : < 25%</span>';
 echo '</div>';
 
 // Back button.

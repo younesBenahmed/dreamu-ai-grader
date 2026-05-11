@@ -38,25 +38,11 @@ class ai_grader {
     /** @var string Model name */
     private string $model;
 
-    private string $deepseek_endpoint;
-
-    /** @var string Vision model endpoint for PDF reading */
-    private string $vision_endpoint;
-
-    /** @var string Vision model name */
-    private string $vision_model;
-
     public function __construct() {
         $this->endpoint = get_config('local_dreamu_ai', 'api_endpoint')
-            ?: 'http://100.76.166.71:8102/v1/chat/completions';
+            ?: 'http://100.76.166.71:8200/v1/chat/completions';
         $this->apikey = get_config('local_dreamu_ai', 'api_key') ?: 'sk-dummy';
-        $this->model = get_config('local_dreamu_ai', 'model_name') ?: 'general';
-        // DeepSeek endpoint for dual grading
-        $base = str_replace('/v1/chat/completions', '', $this->endpoint);
-        $this->deepseek_endpoint = $base . '/v1/chat/completions';
-        // Vision model endpoint for PDF reading
-        $this->vision_endpoint = 'http://100.76.166.71:8105/v1/chat/completions';
-        $this->vision_model = 'vision-lite';
+        $this->model = get_config('local_dreamu_ai', 'model_name') ?: 'hal-9001-chat';
     }
 
     /**
@@ -211,23 +197,24 @@ class ai_grader {
             ];
         }
 
-        // === PASS 4 (DeepSeek): Independent counter-review and grade ===
-        $ds_system = "You are a strict {$contenttype} professor. A student submitted work and another AI gave a review. "
-            . "Read the submission yourself and give YOUR OWN independent grade. "
-            . "You may DISAGREE with the first review. Be stricter on real errors and missing requirements. "
+        // === PASS 4: Independent counter-review (same model, stricter prompt) ===
+        $counter_system = "You are a STRICT {$contenttype} professor doing a SECOND independent review. "
+            . "Another reviewer already graded this work. You MUST form your OWN opinion. "
+            . "Be STRICTER on real errors, missing requirements, and quality issues. "
+            . "You may DISAGREE with the first review — do NOT just copy their grade. "
             . "Respond ONLY in JSON: {\"grade\": NUMBER, \"feedback\": \"TEXT\"}\n"
             . "Grade 0-{$maxgrade}. Use FULL range. Feedback in {$langname}. Cite specific elements.";
 
-        $ds_user = "Criteria:\n{$prompt}\n\nMax: {$maxgrade}\n\nFirst AI review:\n" . substr($qwen_review, 0, 3000)
-            . "\n\nFirst AI grade: " . $qwen_result->grade . "/{$maxgrade}"
+        $counter_user = "Criteria:\n{$prompt}\n\nMax: {$maxgrade}\n\nFirst review summary:\n" . substr($qwen_review, 0, 3000)
+            . "\n\nFirst grade: " . $qwen_result->grade . "/{$maxgrade}"
             . "\n\nStudent submission:\n" . substr($submissiontext, 0, 8000) . "\n\nYour independent JSON grade:";
 
         try {
-            $ds_response = $this->call_deepseek($ds_system, $ds_user);
-            $ds_result = $this->parse_response($ds_response, $maxgrade);
+            $counter_response = $this->call_api($counter_system, $counter_user);
+            $ds_result = $this->parse_response($counter_response, $maxgrade);
         } catch (\Exception $e) {
-            // If DeepSeek fails, use only Qwen grade
-            $ds_result = (object)['grade' => $qwen_result->grade, 'feedback' => 'DeepSeek review unavailable'];
+            // If counter-review fails, use only first grade
+            $ds_result = (object)['grade' => $qwen_result->grade, 'feedback' => 'Contre-correction indisponible'];
         }
 
         // === FINAL: Average both grades and build structured HTML feedback ===
@@ -268,7 +255,7 @@ class ai_grader {
 
         $html .= '<div style="background: ' . $grade_color . '22; border-left: 4px solid ' . $grade_color . '; padding: 12px 16px; margin-bottom: 16px; border-radius: 4px;">';
         $html .= '<strong style="font-size: 1.2em;">Note finale (moyenne) : ' . $final_grade . '/' . $maxgrade . '</strong>';
-        $html .= '<br><small>Qwen : ' . $qwen->grade . '/' . $maxgrade . ' | DeepSeek : ' . $ds->grade . '/' . $maxgrade . '</small>';
+        $html .= '<br><small>Pass principal : ' . $qwen->grade . '/' . $maxgrade . ' | Contre-correction : ' . $ds->grade . '/' . $maxgrade . '</small>';
         $html .= '<br><small>Type detecte : ' . htmlspecialchars($contenttype) . '</small>';
         $html .= '</div>';
 
@@ -310,9 +297,9 @@ class ai_grader {
         }
 
         // DeepSeek feedback
-        if (!empty($ds->feedback) && $ds->feedback !== 'DeepSeek review unavailable') {
+        if (!empty($ds->feedback) && $ds->feedback !== 'Contre-correction indisponible') {
             $html .= '<div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 10px 14px; margin-bottom: 12px; border-radius: 4px;">';
-            $html .= '<strong style="color: #856404;">Contre-evaluation (DeepSeek)</strong><br>';
+            $html .= '<strong style="color: #856404;">Contre-correction</strong><br>';
             $html .= htmlspecialchars(substr($ds->feedback, 0, 500));
             $html .= '</div>';
         }
@@ -355,62 +342,6 @@ class ai_grader {
         $result->feedback = $result->commentaire;
 
         return $result;
-    }
-
-    /**
-     * Call DeepSeek API directly (bypass router to avoid image detection).
-     */
-    private function call_deepseek(string $systemprompt, string $userprompt): string {
-        $systemprompt = $this->sanitize_utf8($systemprompt);
-        $userprompt = $this->sanitize_utf8($userprompt);
-
-        // Use DeepSeek endpoint (port 8103)
-        $endpoint = str_replace(':8200/', ':8103/', $this->endpoint);
-
-        $payload = json_encode([
-            'model' => 'reasoning-lite',
-            'messages' => [
-                ['role' => 'system', 'content' => $systemprompt],
-                ['role' => 'user', 'content' => $userprompt],
-            ],
-            'temperature' => 0.3,
-            'max_tokens' => 1500,
-        ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
-
-        $ch = curl_init($endpoint);
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $this->apikey,
-            ],
-            CURLOPT_TIMEOUT => 300,
-            CURLOPT_CONNECTTIMEOUT => 30,
-        ]);
-
-        $response = curl_exec($ch);
-        $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($response === false || $httpcode !== 200) {
-            throw new \moodle_exception('api_error', 'local_dreamu_ai', '', null, "DeepSeek HTTP {$httpcode}");
-        }
-
-        $decoded = json_decode($response, true);
-        $content = $decoded['choices'][0]['message']['content'] ?? '';
-
-        // Remove <think> tags from DeepSeek
-        $content = preg_replace('/<think>.*?<\/think>/s', '', $content);
-        // Remove English thinking before French
-        if (preg_match('/(Pour |L\'|La |Le |Les |Voici |\{)/u', $content, $m, PREG_OFFSET_CAPTURE)) {
-            if ($m[0][1] > 100) {
-                $content = substr($content, $m[0][1]);
-            }
-        }
-
-        return trim($content);
     }
 
     private function call_api(string $systemprompt, string $userprompt): string {
@@ -471,73 +402,6 @@ class ai_grader {
         return $decoded['choices'][0]['message']['content'];
     }
 
-    /**
-     * Call the Vision model API to extract text from a PDF image/page.
-     *
-     * @param string $base64content Base64-encoded PDF content
-     * @param string $filename Original filename for context
-     * @return string Extracted text
-     */
-    private function call_vision_for_pdf(string $base64content, string $filename): string {
-        $payload = json_encode([
-            'model' => $this->vision_model,
-            'messages' => [
-                [
-                    'role' => 'system',
-                    'content' => 'You are a document text extractor. Extract ALL text content from this PDF document. '
-                        . 'Preserve the structure, headings, and formatting as much as possible. '
-                        . 'Output only the extracted text, nothing else.',
-                ],
-                [
-                    'role' => 'user',
-                    'content' => [
-                        [
-                            'type' => 'image_url',
-                            'image_url' => [
-                                'url' => 'data:application/pdf;base64,' . $base64content,
-                            ],
-                        ],
-                        [
-                            'type' => 'text',
-                            'text' => "Extract all text from this PDF file: {$filename}",
-                        ],
-                    ],
-                ],
-            ],
-            'temperature' => 0.1,
-            'max_tokens' => 4000,
-        ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
-
-        if ($payload === false) {
-            throw new \Exception('Failed to encode vision API payload');
-        }
-
-        $ch = curl_init($this->vision_endpoint);
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $this->apikey,
-            ],
-            CURLOPT_TIMEOUT => 120,
-            CURLOPT_CONNECTTIMEOUT => 30,
-        ]);
-
-        $response = curl_exec($ch);
-        $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($response === false || $httpcode !== 200) {
-            throw new \Exception("Vision API HTTP {$httpcode}");
-        }
-
-        $decoded = json_decode($response, true);
-        $content = $decoded['choices'][0]['message']['content'] ?? '';
-
-        return trim($content);
-    }
 
     /**
      * Parse the AI response into a grade and feedback.
@@ -648,25 +512,7 @@ class ai_grader {
                     $content = $file->get_content();
                     $text .= "--- File: {$filename} ---\n{$content}\n\n";
                 } elseif (strtolower($extension) === 'pdf') {
-                    // Try to extract text from PDF via Vision model API
-                    try {
-                        $pdfcontent = $file->get_content();
-                        $base64 = base64_encode($pdfcontent);
-                        // Limit to ~10MB base64 to avoid API overload
-                        if (strlen($base64) > 10 * 1024 * 1024) {
-                            $text .= "--- File: {$filename} (PDF too large for vision extraction, {$file->get_filesize()} bytes) ---\n\n";
-                        } else {
-                            $grader = new self();
-                            $extracted = $grader->call_vision_for_pdf($base64, $filename);
-                            if (!empty(trim($extracted))) {
-                                $text .= "--- File: {$filename} (PDF, extracted via Vision) ---\n{$extracted}\n\n";
-                            } else {
-                                $text .= "--- File: {$filename} (PDF file, vision returned empty) ---\n\n";
-                            }
-                        }
-                    } catch (\Exception $e) {
-                        $text .= "--- File: {$filename} (PDF file, cannot read: " . $e->getMessage() . ") ---\n\n";
-                    }
+                    $text .= "--- File: {$filename} (PDF, {$file->get_filesize()} bytes) ---\n\n";
                 } elseif (strtolower($extension) === 'zip') {
                     // Extract ZIP and read text files inside
                     $tmpdir = make_temp_directory('dreamu_ai_zip_' . $submission->id);
