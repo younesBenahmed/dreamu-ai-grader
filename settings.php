@@ -27,28 +27,40 @@ defined('MOODLE_INTERNAL') || die();
 if ($hassiteconfig) {
     $settings = new admin_settingpage('local_dreamu_ai', get_string('pluginname', 'local_dreamu_ai'));
 
+    $settings->add(new admin_setting_heading(
+        'local_dreamu_ai/heading_api',
+        'Configuration IA',
+        'Ces parametres sont partages avec le plugin QCM Generator. Modifiez-les ici pour les deux plugins.'
+    ));
+
     $settings->add(new admin_setting_configtext(
         'local_dreamu_ai/api_endpoint',
-        get_string('api_endpoint', 'local_dreamu_ai'),
-        get_string('api_endpoint_desc', 'local_dreamu_ai'),
-        'http://100.76.166.71:8102/v1/chat/completions',
+        'Endpoint API',
+        'URL de l\'API compatible OpenAI (ex: http://100.76.166.71:8200/v1/chat/completions)',
+        'http://100.76.166.71:8200/v1/chat/completions',
         PARAM_URL
     ));
 
     $settings->add(new admin_setting_configtext(
         'local_dreamu_ai/api_key',
-        get_string('api_key', 'local_dreamu_ai'),
-        get_string('api_key_desc', 'local_dreamu_ai'),
+        'Cle API',
+        'Cle d\'authentification (sk-dummy pour vLLM local)',
         'sk-dummy',
         PARAM_TEXT
     ));
 
     $settings->add(new admin_setting_configtext(
         'local_dreamu_ai/model_name',
-        get_string('model_name', 'local_dreamu_ai'),
-        get_string('model_name_desc', 'local_dreamu_ai'),
-        'general',
+        'Nom du modele',
+        'Le served-model-name du modele vLLM (ex: hal-9001-code, general)',
+        'hal-9001-code',
         PARAM_TEXT
+    ));
+
+    $settings->add(new admin_setting_heading(
+        'local_dreamu_ai/heading_test',
+        'Test de connexion',
+        'Allez sur <a href="../local/dreamu_ai/test_api.php">cette page</a> pour tester la connexion a l\'IA.'
     ));
 
     $ADMIN->add('localplugins', $settings);
