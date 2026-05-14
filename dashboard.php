@@ -138,10 +138,8 @@ foreach ($allstats as $stat) {
     $actions = '';
     $statsurl = new moodle_url('/local/dreamu_ai/stats.php', ['id' => $stat->cmid]);
     $validateurl = new moodle_url('/local/dreamu_ai/validate.php', ['id' => $stat->cmid]);
-    $plagiarismurl = new moodle_url('/local/dreamu_ai/plagiarism.php', ['id' => $stat->cmid]);
     $actions .= '<a href="' . $statsurl . '" class="btn btn-sm btn-outline-info mr-1">Stats</a>';
-    $actions .= '<a href="' . $validateurl . '" class="btn btn-sm btn-outline-success mr-1">Valider</a>';
-    $actions .= '<a href="' . $plagiarismurl . '" class="btn btn-sm btn-outline-danger">Plagiat</a>';
+    $actions .= '<a href="' . $validateurl . '" class="btn btn-sm btn-outline-success">Valider</a>';
 
     $table->data[] = [
         format_string($stat->name),
