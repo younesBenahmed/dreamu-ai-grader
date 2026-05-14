@@ -63,12 +63,22 @@ class grade_submissions extends \core\task\adhoc_task {
             return;
         }
 
-        $prompt = $config->prompt ?: get_string('grading_prompt_default', 'local_dreamu_ai');
+        $rawprompt = $config->prompt ?: get_string('grading_prompt_default', 'local_dreamu_ai');
         $maxgrade = floatval($assign->get_instance()->grade);
         if ($maxgrade <= 0) {
             $maxgrade = floatval($config->maxgrade);
         }
         $language = $config->language ?: 'fr';
+
+        // Substitute placeholders so teachers can write {maxgrade}, {assignname}, etc. in their prompt.
+        $assigninfo = $assign->get_instance();
+        $prompt = strtr($rawprompt, [
+            '{maxgrade}'   => (string)$maxgrade,
+            '{assignname}' => $assigninfo->name,
+            '{coursename}' => $course->fullname,
+            '{language}'   => $language === 'fr' ? 'français' : 'english',
+            '{duedate}'    => !empty($assigninfo->duedate) ? userdate($assigninfo->duedate, '%d/%m/%Y') : '—',
+        ]);
 
         // Get all submitted submissions.
         $submissions = $DB->get_records('assign_submission', [
