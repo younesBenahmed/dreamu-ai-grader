@@ -25,6 +25,7 @@
 
 require_once(__DIR__ . '/../../config.php');
 require_once($CFG->dirroot . '/mod/assign/locallib.php');
+require_once($CFG->libdir . '/gradelib.php');
 
 $cmid = required_param('id', PARAM_INT);
 $action = optional_param('action', '', PARAM_ALPHA);
@@ -138,6 +139,52 @@ if ($action === 'approveall' && confirm_sesskey()) {
         get_string('all_grades_approved', 'local_dreamu_ai', $approved),
         null,
         \core\output\notification::NOTIFY_SUCCESS
+    );
+}
+
+if ($action === 'publishgrades' && confirm_sesskey()) {
+    $records = $DB->get_records('local_dreamu_ai_grades', [
+        'assignid' => $cm->instance,
+        'status' => 'validated',
+        'validated' => 1,
+    ]);
+
+    $published = 0;
+    $errors = 0;
+    foreach ($records as $record) {
+        $grades = new stdClass();
+        $grades->userid = $record->userid;
+        $grades->rawgrade = $record->grade;
+        $grades->feedback = $record->feedback;
+        $grades->feedbackformat = FORMAT_HTML;
+
+        $result = grade_update(
+            'mod/assign',
+            $cm->course,
+            'mod',
+            'assign',
+            $cm->instance,
+            0,
+            $grades
+        );
+
+        if ($result === GRADE_UPDATE_OK) {
+            $published++;
+        } else {
+            $errors++;
+        }
+    }
+
+    $message = get_string('grades_published', 'local_dreamu_ai');
+    if ($errors > 0) {
+        $message .= " ({$errors} error(s))";
+    }
+
+    redirect(
+        new moodle_url('/local/dreamu_ai/validate.php', ['id' => $cmid]),
+        $message,
+        null,
+        $errors > 0 ? \core\output\notification::NOTIFY_WARNING : \core\output\notification::NOTIFY_SUCCESS
     );
 }
 
@@ -332,6 +379,33 @@ if (!empty($processed)) {
     }
 
     echo html_writer::table($table);
+
+    // Count validated grades to decide whether to show the publish button.
+    $validatedcount = 0;
+    foreach ($processed as $r) {
+        if ($r->status === 'validated') {
+            $validatedcount++;
+        }
+    }
+
+    if ($validatedcount > 0) {
+        $publishurl = new moodle_url('/local/dreamu_ai/validate.php', [
+            'id' => $cmid,
+            'action' => 'publishgrades',
+            'sesskey' => sesskey(),
+        ]);
+        echo html_writer::start_div('mt-3 mb-3');
+        echo html_writer::link(
+            $publishurl,
+            get_string('publish_grades', 'local_dreamu_ai') . ' (' . $validatedcount . ')',
+            [
+                'class' => 'btn btn-primary',
+                'onclick' => "return confirm('" .
+                    get_string('confirm_publish_grades', 'local_dreamu_ai') . "');",
+            ]
+        );
+        echo html_writer::end_div();
+    }
 }
 
 if (empty($pending) && empty($processed)) {

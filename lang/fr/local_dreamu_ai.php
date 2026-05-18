@@ -246,3 +246,8 @@ $string['api_key'] = 'Clé API';
 $string['api_key_desc'] = 'Clé API pour le service LLM (utilisez sk-dummy pour vLLM)';
 $string['model_name'] = 'Nom du modèle';
 $string['model_name_desc'] = 'Le modèle à utiliser pour la correction (ex: general)';
+
+// Publier dans le carnet de notes.
+$string['publish_grades'] = 'Publier dans le carnet de notes';
+$string['grades_published'] = 'Les notes ont ete publiees dans le carnet de notes.';
+$string['confirm_publish_grades'] = 'Publier toutes les notes validees dans le carnet de notes Moodle ?';
