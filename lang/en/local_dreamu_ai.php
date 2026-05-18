@@ -89,3 +89,8 @@ $string['api_key'] = 'API key';
 $string['api_key_desc'] = 'API key for the LLM service (use sk-dummy for vLLM)';
 $string['model_name'] = 'Model name';
 $string['model_name_desc'] = 'The model to use for grading (e.g., general)';
+
+// Publish to gradebook.
+$string['publish_grades'] = 'Publish to Gradebook';
+$string['grades_published'] = 'Grades have been published to the gradebook.';
+$string['confirm_publish_grades'] = 'Publish all validated grades to the Moodle gradebook?';
