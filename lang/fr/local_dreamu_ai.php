@@ -249,5 +249,5 @@ $string['model_name_desc'] = 'Le modèle à utiliser pour la correction (ex: gen
 
 // Publier dans le carnet de notes.
 $string['publish_grades'] = 'Publier dans le carnet de notes';
-$string['grades_published'] = 'Les notes ont ete publiees dans le carnet de notes.';
-$string['confirm_publish_grades'] = 'Publier toutes les notes validees dans le carnet de notes Moodle ?';
+$string['grades_published'] = 'Les notes ont été publiées dans le carnet de notes.';
+$string['confirm_publish_grades'] = 'Publier toutes les notes validées dans le carnet de notes Moodle ?';
