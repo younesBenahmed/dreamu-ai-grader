@@ -40,8 +40,8 @@ class ai_grader {
 
     public function __construct() {
         $this->endpoint = get_config('local_dreamu_ai', 'api_endpoint')
-            ?: 'http://100.76.166.71:8200/v1/chat/completions';
-        $this->apikey = get_config('local_dreamu_ai', 'api_key') ?: 'sk-dummy';
+            ?: 'http://100.76.166.71:11434/v1/chat/completions';
+        $this->apikey = get_config('local_dreamu_ai', 'api_key') ?: 'ollama';
         $this->model = get_config('local_dreamu_ai', 'model_name') ?: 'hal-9001-chat';
     }
 

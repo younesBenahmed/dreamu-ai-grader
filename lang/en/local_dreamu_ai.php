@@ -264,7 +264,7 @@ $string['settings_heading'] = 'Dream-U AI Grader Settings';
 $string['api_endpoint'] = 'vLLM API endpoint';
 $string['api_endpoint_desc'] = 'The OpenAI-compatible API endpoint for vLLM (e.g., http://100.76.166.71:8102/v1/chat/completions)';
 $string['api_key'] = 'API key';
-$string['api_key_desc'] = 'API key for the LLM service (use sk-dummy for vLLM)';
+$string['api_key_desc'] = 'API key for the LLM service (use ollama for vLLM)';
 $string['model_name'] = 'Model name';
 $string['model_name_desc'] = 'The model to use for grading (e.g., general)';
 

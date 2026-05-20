@@ -241,9 +241,9 @@ $string['dreamu_ai:configure'] = 'Configurer la correction IA';
 // Settings page.
 $string['settings_heading'] = 'Paramètres Dream-U AI Grader';
 $string['api_endpoint'] = 'Endpoint API vLLM';
-$string['api_endpoint_desc'] = 'L\'endpoint API compatible OpenAI pour vLLM (ex: http://100.76.166.71:8200/v1/chat/completions)';
+$string['api_endpoint_desc'] = 'L\'endpoint API compatible OpenAI pour vLLM (ex: http://100.76.166.71:11434/v1/chat/completions)';
 $string['api_key'] = 'Clé API';
-$string['api_key_desc'] = 'Clé API pour le service LLM (utilisez sk-dummy pour vLLM)';
+$string['api_key_desc'] = 'Clé API pour le service LLM (utilisez ollama pour vLLM)';
 $string['model_name'] = 'Nom du modèle';
 $string['model_name_desc'] = 'Le modèle à utiliser pour la correction (ex: general)';
 
