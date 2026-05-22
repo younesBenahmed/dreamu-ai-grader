@@ -160,49 +160,80 @@ class ai_grader {
             $analysis = "Analysis failed: " . $e->getMessage();
         }
 
-        // === PASS 2 (Qwen): Detailed review ===
-        $system2 = "You are an expert {$contenttype} reviewer. Perform a DETAILED review of this {$type_label}. You MUST:\n"
-            . "{$review_focus}\n"
-            . "Be VERY specific. Respond in {$langname}.";
+        // === PASS 2: Exhaustive review with strict verification ===
+        $system2 = "You are a university professor performing a RIGOROUS academic review of a student's {$type_label}.\n\n"
+            . "YOUR TASK: Go through EACH exercise/question in the grading criteria, one by one, and evaluate the student's answer.\n\n"
+            . "FOR EACH EXERCISE, you MUST write:\n"
+            . "### Exercise N: [title]\n"
+            . "- STATUS: DONE / PARTIALLY DONE / NOT DONE / MISSING\n"
+            . "- METHOD: Describe what method the student used (or 'no method shown')\n"
+            . "- VERIFICATION: Redo the calculation yourself. State the correct answer. Compare with student's answer.\n"
+            . "- ERRORS: List every specific error (wrong value, missing step, logical flaw, no justification)\n"
+            . "- QUALITY: Comment on clarity, rigor, presentation\n\n"
+            . "THEN provide a general assessment:\n"
+            . "{$review_focus}\n\n"
+            . "ABSOLUTE RULES:\n"
+            . "- You MUST independently verify every numerical result. Do the math yourself.\n"
+            . "- If the student wrote 'I don't know' or left an exercise blank, write 'NOT DONE'.\n"
+            . "- If the student gives a result without showing work, write 'result without justification'.\n"
+            . "- If you cannot find an exercise in the submission, write 'MISSING from submission'.\n"
+            . "- Do NOT hallucinate. Do NOT credit work that is not present. Only evaluate what is ACTUALLY written.\n"
+            . "- Be EXHAUSTIVE. A review that misses errors is worse than one that is too strict.\n"
+            . "Respond in {$langname}.";
 
-        $user2 = "Analysis:\n{$analysis}\n\nCriteria:\n{$prompt}\n\nSubmission:\n{$submissiontext}";
+        $user2 = "Analysis:\n{$analysis}\n\nGrading criteria:\n{$prompt}\n\nStudent submission:\n{$submissiontext}";
         if (strlen($user2) > 28000) {
             $user2 = substr($user2, 0, 28000) . "\n[... truncated ...]";
         }
 
         try {
-            $qwen_review = $this->call_api($system2, $user2);
+            $qwen_review = $this->call_api($system2, $user2, 0.2, 3000);
         } catch (\Exception $e) {
             $qwen_review = "Review failed: " . $e->getMessage();
         }
 
-        // === PASS 3 (Qwen): Grade with structured feedback ===
+        // === PASS 3: Per-criterion grading with structured JSON feedback ===
         $scale = $this->build_grade_scale($maxgrade);
-        $system3 = "Based on your review, give a grade in JSON with this EXACT format:\n"
-            . "{\"grade\": NUMBER, \"points_forts\": [\"point 1\", \"point 2\"], \"erreurs\": [\"error 1\", \"error 2\"], \"suggestions\": [\"suggestion 1\", \"suggestion 2\"], \"commentaire\": \"overall comment\"}\n"
-            . "Grade 0-{$maxgrade}. Use FULL range: {$scale}.\n"
-            . "Each array must have at least 2 items. Be specific, cite concrete elements from the submission. In {$langname}.\n"
-            . "RESPOND ONLY WITH THE JSON, no extra text.";
+        $system3 = "You are a STRICT university grader. You MUST grade each criterion SEPARATELY, then sum to get the total.\n\n"
+            . "RESPOND ONLY with valid JSON in this EXACT format:\n"
+            . "{\"criteria_grades\": [{\"name\": \"criterion name\", \"max\": MAX_POINTS, \"score\": POINTS_GIVEN, \"justification\": \"why this score\"}], \"grade\": TOTAL, \"points_forts\": [\"...\"], \"erreurs\": [\"...\"], \"suggestions\": [\"...\"], \"commentaire\": \"...\"}\n\n"
+            . "MANDATORY RULES:\n"
+            . "- The 'grade' field MUST equal the SUM of all 'score' values in criteria_grades.\n"
+            . "- Each criterion score MUST be between 0 and its max value.\n"
+            . "- For each criterion, explain in 'justification' what the student did or did not do.\n"
+            . "- NOT ATTEMPTED = 0 points. No exceptions.\n"
+            . "- CORRECT METHOD + WRONG ANSWER = 50-70% of max for that criterion.\n"
+            . "- CORRECT ANSWER + NO JUSTIFICATION = 30-50% of max.\n"
+            . "- PERFECT = full points ONLY if method, result AND justification are all correct.\n"
+            . "- Calculation error = deduct 0.5-1 point per error.\n"
+            . "- Do NOT credit work that is NOT in the submission. Check your review carefully.\n"
+            . "- points_forts, erreurs, suggestions: at least 2 items each. Be specific. In {$langname}.\n"
+            . "RESPOND ONLY WITH THE JSON.";
 
         // Pass 3 is critical -- if it fails, the whole grading fails.
-        // Do NOT assign a fallback grade; let the error propagate so the teacher is notified.
-        $qwen_response = $this->call_api($system3, "Criteria:\n{$prompt}\n\nMax: {$maxgrade}\n\nReview:\n{$qwen_review}\n\nJSON:");
+        $qwen_response = $this->call_api($system3,
+            "Grading criteria:\n{$prompt}\n\nMax grade: {$maxgrade}\n\nDetailed review:\n{$qwen_review}\n\nJSON:",
+            0.1, 4000);
         $qwen_result = $this->parse_structured_response($qwen_response, $maxgrade);
 
-        // === PASS 4: Independent counter-review (same model, stricter prompt) ===
-        $counter_system = "You are a STRICT {$contenttype} professor doing a SECOND independent review. "
-            . "Another reviewer already graded this work. You MUST form your OWN opinion. "
-            . "Be STRICTER on real errors, missing requirements, and quality issues. "
-            . "You may DISAGREE with the first review — do NOT just copy their grade. "
-            . "Respond ONLY in JSON: {\"grade\": NUMBER, \"feedback\": \"TEXT\"}\n"
-            . "Grade 0-{$maxgrade}. Use FULL range. Feedback in {$langname}. Cite specific elements.";
+        // === PASS 4: BLIND independent counter-review (does NOT see pass 3 grade) ===
+        $counter_system = "You are an independent STRICT examiner grading a student submission from scratch.\n"
+            . "You have NOT seen any previous grade or review. Form your OWN opinion.\n\n"
+            . "RULES:\n"
+            . "- Grade ONLY based on the criteria provided and the actual submission content.\n"
+            . "- An exercise not done = 0 points. An exercise partially done = partial credit.\n"
+            . "- Verify all calculations independently. If a result is wrong, deduct points.\n"
+            . "- A correct answer without proof/justification = max 50% for that exercise.\n"
+            . "- Do NOT be generous. University standards: average work = 10-12/{$maxgrade}.\n"
+            . "- Respond ONLY in JSON: {\"grade\": NUMBER, \"feedback\": \"TEXT\"}\n"
+            . "- Grade 0-{$maxgrade}. Feedback in {$langname}. Cite specific elements.";
 
-        $counter_user = "Criteria:\n{$prompt}\n\nMax: {$maxgrade}\n\nFirst review summary:\n" . substr($qwen_review, 0, 3000)
-            . "\n\nFirst grade: " . $qwen_result->grade . "/{$maxgrade}"
-            . "\n\nStudent submission:\n" . substr($submissiontext, 0, 8000) . "\n\nYour independent JSON grade:";
+        $counter_user = "Grading criteria:\n{$prompt}\n\nMax grade: {$maxgrade}\n\n"
+            . "Student submission:\n" . substr($submissiontext, 0, 12000)
+            . "\n\nYour independent JSON grade:";
 
         try {
-            $counter_response = $this->call_api($counter_system, $counter_user);
+            $counter_response = $this->call_api($counter_system, $counter_user, 0.1, 3000);
             $ds_result = $this->parse_response($counter_response, $maxgrade);
         } catch (\Exception $e) {
             // If counter-review fails, use only first grade
@@ -237,7 +268,7 @@ class ai_grader {
                 . "Your FINAL arbitrated JSON grade:";
 
             try {
-                $arb_response = $this->call_api($arb_system, $arb_user);
+                $arb_response = $this->call_api($arb_system, $arb_user, 0.1, 2000);
                 $arb_json = $arb_response;
                 if (preg_match('/\{[\s\S]*\}/s', $arb_response, $m)) {
                     $arb_json = $m[0];
@@ -264,6 +295,11 @@ class ai_grader {
 
         $final_grade = max(0, min($maxgrade, $final_grade));
 
+        // === CALIBRATION: detect inconsistencies between feedback content and grade ===
+        $calibration = $this->calibrate_grade($final_grade, $maxgrade, $qwen_result, $ds_result, $qwen_review);
+        $final_grade = $calibration['grade'];
+        $calibration_note = $calibration['note'];
+
         $final_feedback = $this->build_html_feedback(
             $qwen_result,
             $ds_result,
@@ -271,7 +307,8 @@ class ai_grader {
             $final_grade,
             $maxgrade,
             $contenttype,
-            $arb_reasoning
+            $arb_reasoning,
+            $calibration_note
         );
 
         $result = new \stdClass();
@@ -284,7 +321,7 @@ class ai_grader {
     /**
      * Build structured HTML feedback with colored sections.
      */
-    private function build_html_feedback(object $qwen, object $ds, string $detailed_review, float $final_grade, float $maxgrade, string $contenttype, string $arb_reasoning = ''): string {
+    private function build_html_feedback(object $qwen, object $ds, string $detailed_review, float $final_grade, float $maxgrade, string $contenttype, string $arb_reasoning = '', string $calibration_note = ''): string {
         $html = '<div style="font-family: sans-serif; max-width: 800px;">';
 
         // AI disclosure banner.
@@ -307,6 +344,29 @@ class ai_grader {
         $html .= '<div style="background: ' . $grade_color . '22; border-left: 4px solid ' . $grade_color . '; padding: 12px 16px; margin-bottom: 16px; border-radius: 4px;">';
         $html .= '<strong style="font-size: 1.2em;">Note : ' . $final_grade . '/' . $maxgrade . '</strong>';
         $html .= '</div>';
+
+        // Per-criterion breakdown table.
+        if (!empty($qwen->criteria_grades)) {
+            $html .= '<div style="margin-bottom: 16px;">';
+            $html .= '<strong>D&eacute;tail par crit&egrave;re :</strong>';
+            $html .= '<table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:0.9em;">';
+            $html .= '<tr style="background:#f0f0f0;"><th style="text-align:left; padding:6px 10px; border:1px solid #ddd;">Crit&egrave;re</th>'
+                . '<th style="width:80px; text-align:center; padding:6px; border:1px solid #ddd;">Score</th>'
+                . '<th style="text-align:left; padding:6px 10px; border:1px solid #ddd;">Justification</th></tr>';
+            foreach ($qwen->criteria_grades as $cg) {
+                $cg = (object)$cg;
+                $cscore = floatval($cg->score ?? 0);
+                $cmax = floatval($cg->max ?? 0);
+                $cpct = $cmax > 0 ? $cscore / $cmax : 0;
+                $ccolor = $cpct >= 0.7 ? '#28a745' : ($cpct >= 0.4 ? '#ffc107' : '#dc3545');
+                $html .= '<tr>';
+                $html .= '<td style="padding:6px 10px; border:1px solid #ddd;">' . htmlspecialchars($cg->name ?? '') . '</td>';
+                $html .= '<td style="text-align:center; padding:6px; border:1px solid #ddd; font-weight:bold; color:' . $ccolor . ';">' . $cscore . '/' . $cmax . '</td>';
+                $html .= '<td style="padding:6px 10px; border:1px solid #ddd; font-size:0.9em;">' . htmlspecialchars($cg->justification ?? '') . '</td>';
+                $html .= '</tr>';
+            }
+            $html .= '</table></div>';
+        }
 
         // Points forts (green)
         if (!empty($qwen->points_forts)) {
@@ -353,6 +413,14 @@ class ai_grader {
             $html .= '</div>';
         }
 
+        // Calibration note (when post-processing adjusted the grade).
+        if (!empty($calibration_note)) {
+            $html .= '<div style="background: #fff3e0; border-left: 4px solid #ff9800; padding: 10px 14px; margin-bottom: 12px; border-radius: 4px; font-size: 0.85em;">';
+            $html .= '<strong style="color: #e65100;">Calibrage appliqu&eacute;</strong><br>';
+            $html .= htmlspecialchars($calibration_note);
+            $html .= '</div>';
+        }
+
         // Arbitration reasoning (when reviewers disagreed).
         if (!empty($arb_reasoning)) {
             $html .= '<div style="background: #e8eaf6; border-left: 4px solid #5c6bc0; padding: 10px 14px; margin-bottom: 12px; border-radius: 4px;">';
@@ -390,18 +458,31 @@ class ai_grader {
         }
 
         $result = new \stdClass();
-        $result->grade = max(0, min($maxgrade, floatval($data->grade)));
         $result->points_forts = isset($data->points_forts) && is_array($data->points_forts) ? $data->points_forts : [];
         $result->erreurs = isset($data->erreurs) && is_array($data->erreurs) ? $data->erreurs : [];
         $result->suggestions = isset($data->suggestions) && is_array($data->suggestions) ? $data->suggestions : [];
         $result->commentaire = isset($data->commentaire) ? (string)$data->commentaire : '';
-        // Also set feedback for compatibility
+        $result->criteria_grades = isset($data->criteria_grades) && is_array($data->criteria_grades) ? $data->criteria_grades : [];
+
+        // If per-criterion grades exist, compute grade as sum of scores (override model's total).
+        if (!empty($result->criteria_grades)) {
+            $computed = 0;
+            foreach ($result->criteria_grades as $cg) {
+                $score = floatval($cg->score ?? $cg['score'] ?? 0);
+                $max = floatval($cg->max ?? $cg['max'] ?? 0);
+                $computed += min($score, $max); // Never exceed criterion max.
+            }
+            $result->grade = max(0, min($maxgrade, round($computed, 2)));
+        } else {
+            $result->grade = max(0, min($maxgrade, floatval($data->grade)));
+        }
+
         $result->feedback = $result->commentaire;
 
         return $result;
     }
 
-    private function call_api(string $systemprompt, string $userprompt): string {
+    private function call_api(string $systemprompt, string $userprompt, float $temperature = 0.3, int $maxtokens = 2000): string {
         // Sanitize UTF-8: remove invalid sequences that would break JSON encoding.
         $systemprompt = $this->sanitize_utf8($systemprompt);
         $userprompt = $this->sanitize_utf8($userprompt);
@@ -412,8 +493,8 @@ class ai_grader {
                 ['role' => 'system', 'content' => $systemprompt],
                 ['role' => 'user', 'content' => $userprompt],
             ],
-            'temperature' => 0.3,
-            'max_tokens' => 2000,
+            'temperature' => $temperature,
+            'max_tokens' => $maxtokens,
         ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 
         if ($payload === false) {
@@ -623,6 +704,145 @@ class ai_grader {
         }
 
         return trim($text);
+    }
+
+    /**
+     * Post-processing calibration: detect inconsistencies between feedback and grade.
+     *
+     * Checks:
+     * 1. Per-criterion scores: if a criterion's justification mentions errors/incomplete but score is > 80%, deduct.
+     * 2. Error count vs grade: if many errors listed but grade > 80%, cap or deduct.
+     * 3. Incomplete exercises: if review mentions "not done/incomplete/missing", enforce 0 for that criterion.
+     * 4. Both passes agree on high grade but review mentions significant issues.
+     *
+     * @return array ['grade' => float, 'note' => string]
+     */
+    private function calibrate_grade(float $grade, float $maxgrade, object $pass3, object $pass4, string $review): array {
+        $original = $grade;
+        $notes = [];
+
+        // --- Check 1: Per-criterion consistency ---
+        if (!empty($pass3->criteria_grades)) {
+            $recomputed = 0;
+            $adjusted_criteria = [];
+
+            foreach ($pass3->criteria_grades as $cg) {
+                $cg = (object)$cg;
+                $score = floatval($cg->score ?? 0);
+                $cmax = floatval($cg->max ?? 0);
+                $justification = strtolower($cg->justification ?? '');
+                $name = strtolower($cg->name ?? '');
+
+                if ($cmax <= 0) {
+                    $recomputed += $score;
+                    continue;
+                }
+
+                $ratio = $score / $cmax;
+
+                // Detect negative signals in the justification.
+                $negative_signals = [
+                    'not done', 'not attempted', 'missing', 'absent', 'pas fait', 'non fait',
+                    'incomplet', 'incomplete', 'pas termine', 'non termine',
+                    'ne sait pas', 'doesn\'t know', 'no answer', 'pas de reponse',
+                    'aucune', 'nothing', 'vide', 'empty',
+                ];
+                $partial_signals = [
+                    'error', 'erreur', 'incorrect', 'faux', 'wrong', 'false',
+                    'bug', 'mistake', 'failed', 'echoue', 'manque',
+                    'without justification', 'sans justification', 'sans preuve',
+                    'no proof', 'no justification', 'partial', 'partiel',
+                    'compilation error', 'syntax error', 'ne compile pas',
+                ];
+
+                $is_missing = false;
+                $has_errors = false;
+
+                foreach ($negative_signals as $sig) {
+                    if (strpos($justification, $sig) !== false) {
+                        $is_missing = true;
+                        break;
+                    }
+                }
+
+                if (!$is_missing) {
+                    foreach ($partial_signals as $sig) {
+                        if (strpos($justification, $sig) !== false) {
+                            $has_errors = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Apply deductions.
+                if ($is_missing && $ratio > 0.3) {
+                    // Justification says missing/not done but score > 30% -- cap at 0.
+                    $score = 0;
+                    $notes[] = "Calibrage: '{$cg->name}' marque non fait -> 0/{$cmax}";
+                } else if ($has_errors && $ratio > 0.8) {
+                    // Justification mentions errors but score > 80% -- cap at 60%.
+                    $score = round($cmax * 0.6, 1);
+                    $notes[] = "Calibrage: '{$cg->name}' contient des erreurs -> {$score}/{$cmax}";
+                }
+
+                $recomputed += min($score, $cmax);
+            }
+
+            $recomputed = round($recomputed, 2);
+
+            if ($recomputed < $grade) {
+                $grade = $recomputed;
+                $notes[] = "Note recalculee apres calibrage par critere: {$grade}/{$maxgrade}";
+            }
+        }
+
+        // --- Check 2: Error count vs grade ratio ---
+        $error_count = count($pass3->erreurs ?? []);
+        $grade_ratio = $maxgrade > 0 ? $grade / $maxgrade : 0;
+
+        // If 3+ errors listed but grade still > 85%, apply penalty.
+        if ($error_count >= 3 && $grade_ratio > 0.85) {
+            $penalty = min($error_count * 0.5, $maxgrade * 0.15); // 0.5pt per error, max 15%
+            $grade = round($grade - $penalty, 2);
+            $notes[] = "Calibrage: {$error_count} erreurs listees, -" . $penalty . " pts";
+        }
+
+        // --- Check 3: Review text mentions incomplete/missing exercises ---
+        $review_lower = strtolower($review);
+        $incomplete_patterns = [
+            '/exercice\s*\d+\s*:?\s*(not done|non fait|incomplet|incomplete|pas fait|manquant|missing)/i',
+            '/n\'?a pas (fait|repondu|traite|termine)/i',
+            '/je n\'?ai pas (reussi|pu|su)/i',
+            '/je sais pas/i',
+        ];
+
+        $incomplete_mentions = 0;
+        foreach ($incomplete_patterns as $pat) {
+            $incomplete_mentions += preg_match_all($pat, $review);
+        }
+
+        if ($incomplete_mentions > 0 && $grade_ratio > 0.7) {
+            $penalty = min($incomplete_mentions * ($maxgrade * 0.1), $maxgrade * 0.25);
+            $grade = round($grade - $penalty, 2);
+            $notes[] = "Calibrage: {$incomplete_mentions} exercice(s) incomplet(s) detecte(s), -" . $penalty . " pts";
+        }
+
+        // --- Check 4: Counter-review significantly lower should pull down ---
+        $p4grade = floatval($pass4->grade ?? $grade);
+        if ($p4grade < $grade && ($grade - $p4grade) > $maxgrade * 0.1) {
+            // Counter gave meaningfully lower -- use weighted: 40% pass3, 60% counter.
+            $pulled = round($grade * 0.4 + $p4grade * 0.6, 2);
+            if ($pulled < $grade) {
+                $notes[] = "Calibrage: contre-correction plus severe ({$p4grade}/{$maxgrade}), ajustement";
+                $grade = $pulled;
+            }
+        }
+
+        // Final clamp.
+        $grade = max(0, min($maxgrade, $grade));
+
+        $note = implode('. ', $notes);
+        return ['grade' => $grade, 'note' => $note];
     }
 
     /**
