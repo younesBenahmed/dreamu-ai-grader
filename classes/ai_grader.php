@@ -40,8 +40,8 @@ class ai_grader {
 
     public function __construct() {
         $this->endpoint = get_config('local_dreamu_ai', 'api_endpoint')
-            ?: 'http://100.76.166.71:11434/v1/chat/completions';
-        $this->apikey = get_config('local_dreamu_ai', 'api_key') ?: 'ollama';
+            ?: 'http://100.76.166.71:8200/v1/chat/completions';
+        $this->apikey = get_config('local_dreamu_ai', 'api_key') ?: 'dummy';
         $this->model = get_config('local_dreamu_ai', 'model_name') ?: 'hal-9001-chat';
     }
 
@@ -177,25 +177,17 @@ class ai_grader {
         }
 
         // === PASS 3 (Qwen): Grade with structured feedback ===
+        $scale = $this->build_grade_scale($maxgrade);
         $system3 = "Based on your review, give a grade in JSON with this EXACT format:\n"
             . "{\"grade\": NUMBER, \"points_forts\": [\"point 1\", \"point 2\"], \"erreurs\": [\"error 1\", \"error 2\"], \"suggestions\": [\"suggestion 1\", \"suggestion 2\"], \"commentaire\": \"overall comment\"}\n"
-            . "Grade 0-{$maxgrade}. Use FULL range: 0-5 very bad, 6-8 poor, 9-11 average, 12-14 good, 15-17 very good, 18-{$maxgrade} excellent.\n"
+            . "Grade 0-{$maxgrade}. Use FULL range: {$scale}.\n"
             . "Each array must have at least 2 items. Be specific, cite concrete elements from the submission. In {$langname}.\n"
             . "RESPOND ONLY WITH THE JSON, no extra text.";
 
-        try {
-            $qwen_response = $this->call_api($system3, "Criteria:\n{$prompt}\n\nMax: {$maxgrade}\n\nReview:\n{$qwen_review}\n\nJSON:");
-            $qwen_result = $this->parse_structured_response($qwen_response, $maxgrade);
-        } catch (\Exception $e) {
-            $qwen_result = (object)[
-                'grade' => $maxgrade * 0.5,
-                'feedback' => 'Qwen grading failed: ' . $e->getMessage(),
-                'points_forts' => [],
-                'erreurs' => [],
-                'suggestions' => [],
-                'commentaire' => 'Qwen grading failed: ' . $e->getMessage(),
-            ];
-        }
+        // Pass 3 is critical -- if it fails, the whole grading fails.
+        // Do NOT assign a fallback grade; let the error propagate so the teacher is notified.
+        $qwen_response = $this->call_api($system3, "Criteria:\n{$prompt}\n\nMax: {$maxgrade}\n\nReview:\n{$qwen_review}\n\nJSON:");
+        $qwen_result = $this->parse_structured_response($qwen_response, $maxgrade);
 
         // === PASS 4: Independent counter-review (same model, stricter prompt) ===
         $counter_system = "You are a STRICT {$contenttype} professor doing a SECOND independent review. "
@@ -217,8 +209,59 @@ class ai_grader {
             $ds_result = (object)['grade' => $qwen_result->grade, 'feedback' => 'Contre-correction indisponible'];
         }
 
-        // === FINAL: Average both grades and build structured HTML feedback ===
-        $final_grade = round(($qwen_result->grade + $ds_result->grade) / 2, 2);
+        // === PASS 5: Decisional arbitration when grades diverge ===
+        $grade_gap = abs($qwen_result->grade - $ds_result->grade);
+        $gap_threshold = $maxgrade * 0.15; // 15% of maxgrade (e.g. 3 pts on /20)
+
+        if ($grade_gap > $gap_threshold) {
+            // Significant disagreement — ask a 5th pass to arbitrate.
+            $arb_system = "You are the HEAD EXAMINER making the FINAL decision. Two independent reviewers graded the same work and DISAGREE.\n"
+                . "Reviewer A gave {$qwen_result->grade}/{$maxgrade}. Reviewer B gave {$ds_result->grade}/{$maxgrade}. Gap: {$grade_gap} points.\n\n"
+                . "You MUST:\n"
+                . "1. Read BOTH justifications carefully\n"
+                . "2. Identify which reviewer is MORE accurate based on the ACTUAL submission content\n"
+                . "3. Decide a FINAL grade — you may side with either reviewer or choose a different grade entirely\n"
+                . "4. Explain WHY you chose this grade in 2-3 sentences\n\n"
+                . "Respond ONLY in JSON: {\"grade\": NUMBER, \"reasoning\": \"TEXT\"}\n"
+                . "Grade 0-{$maxgrade}. In {$langname}.";
+
+            $arb_user = "Grading criteria:\n{$prompt}\n\nMax: {$maxgrade}\n\n"
+                . "=== REVIEWER A (grade: {$qwen_result->grade}) ===\n"
+                . "Points forts: " . implode(', ', $qwen_result->points_forts ?? []) . "\n"
+                . "Erreurs: " . implode(', ', $qwen_result->erreurs ?? []) . "\n"
+                . "Commentaire: " . ($qwen_result->commentaire ?? '') . "\n\n"
+                . "=== REVIEWER B (grade: {$ds_result->grade}) ===\n"
+                . substr($ds_result->feedback ?? '', 0, 2000) . "\n\n"
+                . "=== STUDENT SUBMISSION (excerpt) ===\n"
+                . substr($submissiontext, 0, 6000) . "\n\n"
+                . "Your FINAL arbitrated JSON grade:";
+
+            try {
+                $arb_response = $this->call_api($arb_system, $arb_user);
+                $arb_json = $arb_response;
+                if (preg_match('/\{[\s\S]*\}/s', $arb_response, $m)) {
+                    $arb_json = $m[0];
+                }
+                $arb_data = json_decode($arb_json);
+                if ($arb_data && isset($arb_data->grade)) {
+                    $final_grade = max(0, min($maxgrade, floatval($arb_data->grade)));
+                    $arb_reasoning = $arb_data->reasoning ?? '';
+                } else {
+                    // Arbitration parsing failed — fall back to weighted average favoring pass 3.
+                    $final_grade = round(($qwen_result->grade * 0.6 + $ds_result->grade * 0.4), 2);
+                    $arb_reasoning = '';
+                }
+            } catch (\Exception $e) {
+                // Arbitration call failed — weighted average.
+                $final_grade = round(($qwen_result->grade * 0.6 + $ds_result->grade * 0.4), 2);
+                $arb_reasoning = '';
+            }
+        } else {
+            // Grades are close — simple average is fine.
+            $final_grade = round(($qwen_result->grade + $ds_result->grade) / 2, 2);
+            $arb_reasoning = '';
+        }
+
         $final_grade = max(0, min($maxgrade, $final_grade));
 
         $final_feedback = $this->build_html_feedback(
@@ -227,7 +270,8 @@ class ai_grader {
             $qwen_review,
             $final_grade,
             $maxgrade,
-            $contenttype
+            $contenttype,
+            $arb_reasoning
         );
 
         $result = new \stdClass();
@@ -240,8 +284,15 @@ class ai_grader {
     /**
      * Build structured HTML feedback with colored sections.
      */
-    private function build_html_feedback(object $qwen, object $ds, string $detailed_review, float $final_grade, float $maxgrade, string $contenttype): string {
+    private function build_html_feedback(object $qwen, object $ds, string $detailed_review, float $final_grade, float $maxgrade, string $contenttype, string $arb_reasoning = ''): string {
         $html = '<div style="font-family: sans-serif; max-width: 800px;">';
+
+        // AI disclosure banner.
+        $html .= '<div style="background: #e3f2fd; border: 1px solid #90caf9; padding: 10px 14px; border-radius: 4px; margin-bottom: 16px; font-size: 0.85em; color: #1565c0;">';
+        $html .= '<strong>Information :</strong> Cette correction a &eacute;t&eacute; assist&eacute;e par intelligence artificielle '
+            . 'et valid&eacute;e par votre enseignant(e). Si vous souhaitez des pr&eacute;cisions ou contester un point, '
+            . 'contactez directement votre enseignant(e).';
+        $html .= '</div>';
 
         // Header with grade summary
         $grade_pct = ($maxgrade > 0) ? ($final_grade / $maxgrade) * 100 : 0;
@@ -254,9 +305,7 @@ class ai_grader {
         }
 
         $html .= '<div style="background: ' . $grade_color . '22; border-left: 4px solid ' . $grade_color . '; padding: 12px 16px; margin-bottom: 16px; border-radius: 4px;">';
-        $html .= '<strong style="font-size: 1.2em;">Note finale (moyenne) : ' . $final_grade . '/' . $maxgrade . '</strong>';
-        $html .= '<br><small>Pass principal : ' . $qwen->grade . '/' . $maxgrade . ' | Contre-correction : ' . $ds->grade . '/' . $maxgrade . '</small>';
-        $html .= '<br><small>Type detecte : ' . htmlspecialchars($contenttype) . '</small>';
+        $html .= '<strong style="font-size: 1.2em;">Note : ' . $final_grade . '/' . $maxgrade . '</strong>';
         $html .= '</div>';
 
         // Points forts (green)
@@ -301,6 +350,14 @@ class ai_grader {
             $html .= '<div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 10px 14px; margin-bottom: 12px; border-radius: 4px;">';
             $html .= '<strong style="color: #856404;">Contre-correction</strong><br>';
             $html .= htmlspecialchars(substr($ds->feedback, 0, 500));
+            $html .= '</div>';
+        }
+
+        // Arbitration reasoning (when reviewers disagreed).
+        if (!empty($arb_reasoning)) {
+            $html .= '<div style="background: #e8eaf6; border-left: 4px solid #5c6bc0; padding: 10px 14px; margin-bottom: 12px; border-radius: 4px;">';
+            $html .= '<strong style="color: #283593;">Arbitrage</strong><br>';
+            $html .= htmlspecialchars($arb_reasoning);
             $html .= '</div>';
         }
 
@@ -399,7 +456,12 @@ class ai_grader {
                 "Invalid API response: {$response}");
         }
 
-        return $decoded['choices'][0]['message']['content'];
+        $content = $decoded['choices'][0]['message']['content'];
+
+        // Filter out <think> tags from reasoning models (DeepSeek R1, etc.).
+        $content = preg_replace('/<think>[\s\S]*?<\/think>/', '', $content);
+
+        return trim($content);
     }
 
 
@@ -561,6 +623,32 @@ class ai_grader {
         }
 
         return trim($text);
+    }
+
+    /**
+     * Build a grade scale description adapted to the maxgrade value.
+     */
+    private function build_grade_scale(float $maxgrade): string {
+        if ($maxgrade <= 5) {
+            return "0-1 very bad, 2 poor, 3 average, 4 good, 5 excellent";
+        }
+        if ($maxgrade <= 10) {
+            $m = $maxgrade;
+            return "0-" . round($m * 0.2) . " very bad, "
+                . round($m * 0.2 + 1) . "-" . round($m * 0.4) . " poor, "
+                . round($m * 0.4 + 1) . "-" . round($m * 0.55) . " average, "
+                . round($m * 0.55 + 1) . "-" . round($m * 0.7) . " good, "
+                . round($m * 0.7 + 1) . "-" . round($m * 0.85) . " very good, "
+                . round($m * 0.85 + 1) . "-" . round($m) . " excellent";
+        }
+        // General formula for any maxgrade.
+        $m = $maxgrade;
+        return "0-" . round($m * 0.25) . " very bad, "
+            . round($m * 0.25 + 1) . "-" . round($m * 0.4) . " poor, "
+            . round($m * 0.4 + 1) . "-" . round($m * 0.55) . " average, "
+            . round($m * 0.55 + 1) . "-" . round($m * 0.7) . " good, "
+            . round($m * 0.7 + 1) . "-" . round($m * 0.85) . " very good, "
+            . round($m * 0.85 + 1) . "-" . round($m) . " excellent";
     }
 
     /**

@@ -49,8 +49,16 @@ if ($action === 'approve' && confirm_sesskey()) {
     $gradeid = required_param('gradeid', PARAM_INT);
     $newgrade = required_param('grade', PARAM_FLOAT);
     $newfeedback = required_param('feedback', PARAM_RAW);
+    $feedbackhtml = optional_param('feedback_html', '', PARAM_RAW);
 
     $record = $DB->get_record('local_dreamu_ai_grades', ['id' => $gradeid], '*', MUST_EXIST);
+
+    // If the teacher didn't modify the plain text, use the original HTML feedback.
+    // Otherwise, use the teacher's edited text as-is.
+    $originalplain = trim(html_to_text($record->feedback, 0, false));
+    if (trim($newfeedback) === $originalplain && !empty($feedbackhtml)) {
+        $newfeedback = $feedbackhtml;
+    }
 
     // Clamp grade.
     $newgrade = max(0, min($maxgrade, $newgrade));
@@ -291,14 +299,26 @@ if (!empty($pending)) {
 
         echo html_writer::end_div(); // row
 
-        // Feedback textarea.
+        // Editable feedback textarea — plain text version the teacher can modify.
+        // If the teacher edits this, their text replaces the HTML feedback.
+        $plaintext = trim(html_to_text($record->feedback, 0, false));
         echo html_writer::tag('label', 'Feedback',
             ['for' => 'feedback_' . $record->id, 'class' => 'font-weight-bold mt-2']);
-        echo html_writer::tag('textarea', s($record->feedback), [
+        echo html_writer::tag('textarea', s($plaintext), [
             'name' => 'feedback',
             'id' => 'feedback_' . $record->id,
             'rows' => 4,
             'class' => 'form-control',
+        ]);
+        echo html_writer::tag('small', 'Modifiable. Si vous ne changez rien, le feedback HTML illustr&eacute; ci-dessus sera envoy&eacute; tel quel.',
+            ['class' => 'form-text text-muted']);
+
+        // Hidden field carries the original HTML feedback.
+        echo html_writer::empty_tag('input', [
+            'type' => 'hidden',
+            'name' => 'feedback_html',
+            'id' => 'feedback_html_' . $record->id,
+            'value' => s($record->feedback),
         ]);
 
         // Action buttons.
