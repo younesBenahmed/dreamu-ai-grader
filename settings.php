@@ -36,8 +36,8 @@ if ($hassiteconfig) {
     $settings->add(new admin_setting_configtext(
         'local_dreamu_ai/api_endpoint',
         'Endpoint API',
-        'URL de l\'API compatible OpenAI (ex: http://100.76.166.71:11434/v1/chat/completions)',
-        'http://100.76.166.71:11434/v1/chat/completions',
+        'URL de l\'API compatible OpenAI (ex: http://100.76.166.71:8200/v1/chat/completions)',
+        'http://100.76.166.71:8200/v1/chat/completions',
         PARAM_URL
     ));
 
@@ -45,7 +45,7 @@ if ($hassiteconfig) {
         'local_dreamu_ai/api_key',
         'Cle API',
         'Cle d\'authentification (ollama pour vLLM local)',
-        'ollama',
+        'dummy',
         PARAM_TEXT
     ));
 
