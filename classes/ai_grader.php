@@ -124,9 +124,11 @@ class ai_grader {
     public function grade_submission(string $submissiontext, string $prompt, float $maxgrade, string $language = 'fr'): object {
         $langname = ($language === 'fr') ? 'French' : 'English';
 
-        $maxchars = 30000;
+        // Limit input size to fit in model context window.
+        // 6000 chars ~ 1500 tokens, leaves room for system prompt + response.
+        $maxchars = 6000;
         if (strlen($submissiontext) > $maxchars) {
-            $submissiontext = substr($submissiontext, 0, $maxchars);
+            $submissiontext = substr($submissiontext, 0, $maxchars) . "\n[... TRUNCATED ...]";
         }
 
         // Auto-detect the content type / programming language
@@ -187,8 +189,8 @@ class ai_grader {
             . "Respond in {$langname}.";
 
         $user2 = "Analysis:\n{$analysis}\n\nGrading criteria:\n{$prompt}\n\nStudent submission:\n{$submissiontext}";
-        if (strlen($user2) > 28000) {
-            $user2 = substr($user2, 0, 28000) . "\n[... truncated ...]";
+        if (strlen($user2) > 6000) {
+            $user2 = substr($user2, 0, 6000) . "\n[... truncated ...]";
         }
 
         try {
@@ -234,7 +236,7 @@ class ai_grader {
             . "- Grade 0-{$maxgrade}. Feedback in {$langname}. Cite specific elements.";
 
         $counter_user = "Grading criteria:\n{$prompt}\n\nMax grade: {$maxgrade}\n\n"
-            . "Student submission:\n" . substr($submissiontext, 0, 12000)
+            . "Student submission:\n" . substr($submissiontext, 0, 5000)
             . "\n\nYour independent JSON grade:";
 
         try {
@@ -269,7 +271,7 @@ class ai_grader {
                 . "=== REVIEWER B (grade: {$ds_result->grade}) ===\n"
                 . substr($ds_result->feedback ?? '', 0, 2000) . "\n\n"
                 . "=== STUDENT SUBMISSION (excerpt) ===\n"
-                . substr($submissiontext, 0, 6000) . "\n\n"
+                . substr($submissiontext, 0, 4000) . "\n\n"
                 . "Your FINAL arbitrated JSON grade:";
 
             try {
@@ -658,6 +660,10 @@ class ai_grader {
 
                 if (in_array(strtolower($extension), $textextensions)) {
                     $content = $file->get_content();
+                    // Convert HTML files to plain text to strip CSS/JS/tags.
+                    if (in_array(strtolower($extension), ['html', 'htm'])) {
+                        $content = html_to_text($content, 0, false);
+                    }
                     $text .= "--- File: {$filename} ---\n{$content}\n\n";
                 } elseif (strtolower($extension) === 'pdf') {
                     $text .= "--- File: {$filename} (PDF, {$file->get_filesize()} bytes) ---\n\n";
