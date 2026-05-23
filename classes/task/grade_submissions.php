@@ -128,6 +128,12 @@ class grade_submissions extends \core\task\adhoc_task {
         $graded = 0;
         $errors = 0;
 
+        // Extract exam subject (assignment description + attached files like PDF).
+        $subject = \local_dreamu_ai\ai_grader::get_assignment_subject($assign);
+        if (!empty($subject)) {
+            mtrace("  Exam subject extracted: " . strlen($subject) . " chars");
+        }
+
         $teacher = $DB->get_record('user', ['id' => $teacherid], '*', MUST_EXIST);
         \core\session\manager::set_user($teacher);
 
@@ -159,8 +165,8 @@ class grade_submissions extends \core\task\adhoc_task {
                         'Submission is empty or contains only binary files.');
                 }
 
-                // Call the AI to grade.
-                $result = $grader->grade_submission($submissiontext, $prompt, $maxgrade, $language);
+                // Call the AI to grade (with exam subject if available).
+                $result = $grader->grade_submission($submissiontext, $prompt, $maxgrade, $language, $subject);
 
                 // Store AI grade — do NOT apply to Moodle gradebook yet.
                 // Teacher must validate first via validate.php.

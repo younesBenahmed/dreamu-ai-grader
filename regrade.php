@@ -77,7 +77,8 @@ if ($confirm && confirm_sesskey()) {
         }
 
         $grader = new \local_dreamu_ai\ai_grader();
-        $result = $grader->grade_submission($submissiontext, $prompt, $maxgrade, $language);
+        $subject = \local_dreamu_ai\ai_grader::get_assignment_subject($assign);
+        $result = $grader->grade_submission($submissiontext, $prompt, $maxgrade, $language, $subject);
 
         $DB->update_record('local_dreamu_ai_grades', (object)[
             'id' => $logid,

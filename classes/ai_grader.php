@@ -121,14 +121,62 @@ class ai_grader {
      * @return object Object with ->grade (float) and ->feedback (string)
      * @throws \moodle_exception If the API call fails or response is unparseable
      */
-    public function grade_submission(string $submissiontext, string $prompt, float $maxgrade, string $language = 'fr'): object {
+    /**
+     * Extract the exam subject from an assignment (description + attached files).
+     */
+    public static function get_assignment_subject(\assign $assign): string {
+        global $DB;
+        $subject = '';
+
+        // 1. Get the assignment description (intro).
+        $instance = $assign->get_instance();
+        if (!empty($instance->intro)) {
+            $introtext = html_to_text($instance->intro, 0, false);
+            if (strlen(trim($introtext)) > 20) {
+                $subject .= "=== SUJET DE L'EXAMEN ===\n" . $introtext . "\n\n";
+            }
+        }
+
+        // 2. Get files attached to the assignment intro (PDF subjects, etc.).
+        $context = $assign->get_context();
+        $fs = get_file_storage();
+        $introfiles = $fs->get_area_files($context->id, 'mod_assign', 'introattachment', 0, 'filename', false);
+
+        foreach ($introfiles as $file) {
+            $filename = $file->get_filename();
+            $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+
+            if ($ext === 'pdf') {
+                // Extract PDF text.
+                $tmppath = make_temp_directory('dreamu_ai_subject') . '/' . $filename;
+                $file->copy_content_to($tmppath);
+                $pdftext = @shell_exec('pdftotext ' . escapeshellarg($tmppath) . ' - 2>/dev/null');
+                @unlink($tmppath);
+                if (!empty(trim($pdftext))) {
+                    $subject .= "=== SUJET (fichier: {$filename}) ===\n";
+                    $subject .= substr($pdftext, 0, 4000) . "\n\n";
+                }
+            } else if (in_array($ext, ['txt', 'md', 'html', 'htm'])) {
+                $content = $file->get_content();
+                if ($ext === 'html' || $ext === 'htm') {
+                    $content = html_to_text($content, 0, false);
+                }
+                $subject .= "=== SUJET (fichier: {$filename}) ===\n";
+                $subject .= substr($content, 0, 4000) . "\n\n";
+            }
+        }
+
+        return trim($subject);
+    }
+
+    public function grade_submission(string $submissiontext, string $prompt, float $maxgrade, string $language = 'fr', string $subject = ''): object {
         $langname = ($language === 'fr') ? 'French' : 'English';
 
         // Limit input size to fit in model context window.
-        // 6000 chars ~ 1500 tokens, leaves room for system prompt + response.
+        // Split into logical sections and keep as much as possible.
         $maxchars = 6000;
         if (strlen($submissiontext) > $maxchars) {
-            $submissiontext = substr($submissiontext, 0, $maxchars) . "\n[... TRUNCATED ...]";
+            $submissiontext = self::smart_truncate($submissiontext, $maxchars);
         }
 
         // Auto-detect the content type / programming language
@@ -188,7 +236,8 @@ class ai_grader {
             . "- Be EXHAUSTIVE. A review that misses errors is worse than one that is too strict.\n"
             . "Respond in {$langname}.";
 
-        $user2 = "Analysis:\n{$analysis}\n\nGrading criteria:\n{$prompt}\n\nStudent submission:\n{$submissiontext}";
+        $subjectblock = !empty($subject) ? "\n\n{$subject}\n" : '';
+        $user2 = "Analysis:\n{$analysis}\n\nGrading criteria:\n{$prompt}{$subjectblock}\n\nStudent submission:\n{$submissiontext}";
         if (strlen($user2) > 6000) {
             $user2 = substr($user2, 0, 6000) . "\n[... truncated ...]";
         }
@@ -235,7 +284,7 @@ class ai_grader {
             . "- Respond ONLY in JSON: {\"grade\": NUMBER, \"feedback\": \"TEXT\"}\n"
             . "- Grade 0-{$maxgrade}. Feedback in {$langname}. Cite specific elements.";
 
-        $counter_user = "Grading criteria:\n{$prompt}\n\nMax grade: {$maxgrade}\n\n"
+        $counter_user = "Grading criteria:\n{$prompt}{$subjectblock}\n\nMax grade: {$maxgrade}\n\n"
             . "Student submission:\n" . substr($submissiontext, 0, 5000)
             . "\n\nYour independent JSON grade:";
 
@@ -660,9 +709,9 @@ class ai_grader {
 
                 if (in_array(strtolower($extension), $textextensions)) {
                     $content = $file->get_content();
-                    // Convert HTML files to plain text to strip CSS/JS/tags.
+                    // Smart extraction for HTML/Jupyter notebooks.
                     if (in_array(strtolower($extension), ['html', 'htm'])) {
-                        $content = html_to_text($content, 0, false);
+                        $content = self::extract_html_smart($content);
                     }
                     $text .= "--- File: {$filename} ---\n{$content}\n\n";
                 } elseif (strtolower($extension) === 'pdf') {
@@ -880,6 +929,100 @@ class ai_grader {
             . round($m * 0.55 + 1) . "-" . round($m * 0.7) . " good, "
             . round($m * 0.7 + 1) . "-" . round($m * 0.85) . " very good, "
             . round($m * 0.85 + 1) . "-" . round($m) . " excellent";
+    }
+
+    /**
+     * Smart truncation: keeps beginning + end of submission to cover all exercises.
+     * Instead of cutting off at 6000 chars (losing later exercises),
+     * takes the first 3500 chars + last 2500 chars with a separator.
+     */
+    private static function smart_truncate(string $text, int $maxchars): string {
+        if (strlen($text) <= $maxchars) {
+            return $text;
+        }
+
+        // Try to split by exercise/section markers first.
+        $sections = preg_split('/(?=--- (?:File|Code|Exercice|Exercise))|(?=(?:#|\/\/).*[Ee]xercice\s*\d)/m', $text);
+
+        if (count($sections) > 1) {
+            // We have identifiable sections -- keep each section's beginning.
+            $result = '';
+            $budget = $maxchars - 100; // Reserve space for separator.
+            $per_section = intdiv($budget, count($sections));
+            $per_section = max($per_section, 500); // At least 500 chars per section.
+
+            foreach ($sections as $section) {
+                $section = trim($section);
+                if (empty($section)) continue;
+                if (strlen($section) > $per_section) {
+                    $result .= substr($section, 0, $per_section) . "\n[...]\n\n";
+                } else {
+                    $result .= $section . "\n\n";
+                }
+                if (strlen($result) >= $budget) break;
+            }
+            return $result;
+        }
+
+        // Fallback: keep first 60% + last 40% to see beginning and end.
+        $head = intval($maxchars * 0.6);
+        $tail = $maxchars - $head - 50;
+        return substr($text, 0, $head)
+            . "\n\n[... MILIEU TRONQUE (" . strlen($text) . " chars total) ...]\n\n"
+            . substr($text, -$tail);
+    }
+
+    /**
+     * Smart extraction from HTML files (especially Jupyter notebooks).
+     * Preserves code blocks, detects graphs/images, strips CSS/JS.
+     */
+    private static function extract_html_smart(string $html): string {
+        $output = '';
+
+        // 1. Remove <style> and <script> blocks entirely.
+        $html = preg_replace('/<style[^>]*>[\s\S]*?<\/style>/i', '', $html);
+        $html = preg_replace('/<script[^>]*>[\s\S]*?<\/script>/i', '', $html);
+        $html = preg_replace('/<head[^>]*>[\s\S]*?<\/head>/i', '', $html);
+
+        // 2. Detect and count images (graphs in Jupyter are <img> with base64 src).
+        $graph_count = 0;
+        if (preg_match_all('/<img[^>]+>/i', $html, $img_matches)) {
+            $graph_count = count($img_matches[0]);
+        }
+
+        // 3. Extract code blocks (Jupyter uses <pre>, <code>, or div.input_area).
+        $code_blocks = [];
+        // Match <pre> blocks (common in Jupyter output).
+        if (preg_match_all('/<pre[^>]*>([\s\S]*?)<\/pre>/i', $html, $pre_matches)) {
+            foreach ($pre_matches[1] as $block) {
+                $clean = strip_tags($block);
+                $clean = html_entity_decode($clean, ENT_QUOTES, 'UTF-8');
+                $clean = trim($clean);
+                if (strlen($clean) > 10) {
+                    $code_blocks[] = $clean;
+                }
+            }
+        }
+
+        // 4. If we found code blocks, use them directly (much better than html_to_text on the whole doc).
+        if (!empty($code_blocks)) {
+            foreach ($code_blocks as $i => $block) {
+                $output .= "--- Code/Output block " . ($i + 1) . " ---\n" . $block . "\n\n";
+            }
+        } else {
+            // Fallback: convert entire HTML to text.
+            $output = html_to_text($html, 0, false);
+        }
+
+        // 5. Add graph summary at the end.
+        if ($graph_count > 0) {
+            $output .= "\n--- GRAPHS DETECTED ---\n";
+            $output .= "{$graph_count} graphique(s)/image(s) detecte(s) dans le document.\n";
+            $output .= "Note: les images ne peuvent pas etre analysees en mode texte. ";
+            $output .= "Evaluez la qualite du code qui genere ces graphiques.\n";
+        }
+
+        return $output;
     }
 
     /**
