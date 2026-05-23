@@ -149,10 +149,12 @@ class ai_grader {
                 . "5. Evaluate whether the prompt/requirements are fully addressed";
         }
 
-        // === PASS 1 (Qwen): Read and understand ===
-        $system1 = "You are a {$contenttype} reviewer. Read the student submission carefully. "
-            . "List ALL files/sections found, describe what each file/function/section does in 2-3 sentences. "
-            . "Identify the main concepts, algorithms, or arguments presented. Respond in {$langname}.";
+        // === PASS 1: Read and understand ===
+        $system1 = "You are a {$contenttype} reviewer. Read the student submission carefully.\n"
+            . "IMPORTANT: Only describe what is ACTUALLY in the submission. Do NOT invent or assume content.\n"
+            . "List ALL files/sections/exercises found. Describe what each one does in 2-3 sentences.\n"
+            . "If the submission mentions diagrams, tables, or visual elements, note them.\n"
+            . "Respond in {$langname}.";
 
         try {
             $analysis = $this->call_api($system1, "Student submission:\n\n{$submissiontext}");
@@ -162,9 +164,12 @@ class ai_grader {
 
         // === PASS 2: Exhaustive review with strict verification ===
         $system2 = "You are a university professor performing a RIGOROUS academic review of a student's {$type_label}.\n\n"
+            . "CRITICAL: You MUST evaluate ONLY what is in the grading criteria. If the criteria mention 3 exercises, review exactly 3 exercises. Do NOT invent additional exercises.\n"
+            . "CRITICAL: Evaluate ONLY the content that is ACTUALLY in the student's submission. Do NOT hallucinate or assume content that is not there.\n"
+            . "CRITICAL: Use ONLY the terminology and concepts from the grading criteria. If the criteria mention diagrams, evaluate diagrams. If they mention calculations, evaluate calculations. Do NOT reference topics not in the criteria.\n\n"
             . "YOUR TASK: Go through EACH exercise/question in the grading criteria, one by one, and evaluate the student's answer.\n\n"
             . "FOR EACH EXERCISE, you MUST write:\n"
-            . "### Exercise N: [title]\n"
+            . "### Exercise N: [title from the grading criteria]\n"
             . "- STATUS: DONE / PARTIALLY DONE / NOT DONE / MISSING\n"
             . "- METHOD: Describe what method the student used (or 'no method shown')\n"
             . "- VERIFICATION: Redo the calculation yourself. State the correct answer. Compare with student's answer.\n"
