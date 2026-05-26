@@ -318,7 +318,7 @@ if (!empty($pending)) {
             'type' => 'hidden',
             'name' => 'feedback_html',
             'id' => 'feedback_html_' . $record->id,
-            'value' => s($record->feedback),
+            'value' => $record->feedback,
         ]);
 
         // Action buttons.

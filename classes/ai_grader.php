@@ -781,17 +781,15 @@ class ai_grader {
         $original = $grade;
         $notes = [];
 
-        // --- Check 1: Per-criterion consistency ---
+        // --- Check 1: Per-criterion consistency (only for severe cases) ---
         if (!empty($pass3->criteria_grades)) {
             $recomputed = 0;
-            $adjusted_criteria = [];
 
             foreach ($pass3->criteria_grades as $cg) {
                 $cg = (object)$cg;
                 $score = floatval($cg->score ?? 0);
                 $cmax = floatval($cg->max ?? 0);
                 $justification = strtolower($cg->justification ?? '');
-                $name = strtolower($cg->name ?? '');
 
                 if ($cmax <= 0) {
                     $recomputed += $score;
@@ -800,49 +798,25 @@ class ai_grader {
 
                 $ratio = $score / $cmax;
 
-                // Detect negative signals in the justification.
-                $negative_signals = [
-                    'not done', 'not attempted', 'missing', 'absent', 'pas fait', 'non fait',
-                    'incomplet', 'incomplete', 'pas termine', 'non termine',
-                    'ne sait pas', 'doesn\'t know', 'no answer', 'pas de reponse',
-                    'aucune', 'nothing', 'vide', 'empty',
-                ];
-                $partial_signals = [
-                    'error', 'erreur', 'incorrect', 'faux', 'wrong', 'false',
-                    'bug', 'mistake', 'failed', 'echoue', 'manque',
-                    'without justification', 'sans justification', 'sans preuve',
-                    'no proof', 'no justification', 'partial', 'partiel',
-                    'compilation error', 'syntax error', 'ne compile pas',
+                // Only flag truly missing work (not partial errors).
+                $missing_signals = [
+                    'not done', 'not attempted', 'pas fait', 'non fait',
+                    'aucune reponse', 'no answer', 'vide', 'empty',
+                    'nothing submitted', 'rien soumis',
                 ];
 
                 $is_missing = false;
-                $has_errors = false;
-
-                foreach ($negative_signals as $sig) {
+                foreach ($missing_signals as $sig) {
                     if (strpos($justification, $sig) !== false) {
                         $is_missing = true;
                         break;
                     }
                 }
 
-                if (!$is_missing) {
-                    foreach ($partial_signals as $sig) {
-                        if (strpos($justification, $sig) !== false) {
-                            $has_errors = true;
-                            break;
-                        }
-                    }
-                }
-
-                // Apply deductions.
-                if ($is_missing && $ratio > 0.3) {
-                    // Justification says missing/not done but score > 30% -- cap at 0.
+                // Only force 0 if clearly not done AND score > 50%.
+                if ($is_missing && $ratio > 0.5) {
                     $score = 0;
-                    $notes[] = "Calibrage: '{$cg->name}' marque non fait -> 0/{$cmax}";
-                } else if ($has_errors && $ratio > 0.8) {
-                    // Justification mentions errors but score > 80% -- cap at 60%.
-                    $score = round($cmax * 0.6, 1);
-                    $notes[] = "Calibrage: '{$cg->name}' contient des erreurs -> {$score}/{$cmax}";
+                    $notes[] = "Calibrage: '{$cg->name}' non fait -> 0/{$cmax}";
                 }
 
                 $recomputed += min($score, $cmax);
@@ -852,48 +826,22 @@ class ai_grader {
 
             if ($recomputed < $grade) {
                 $grade = $recomputed;
-                $notes[] = "Note recalculee apres calibrage par critere: {$grade}/{$maxgrade}";
+                $notes[] = "Note recalculee apres calibrage: {$grade}/{$maxgrade}";
             }
         }
 
-        // --- Check 2: Error count vs grade ratio ---
-        $error_count = count($pass3->erreurs ?? []);
-        $grade_ratio = $maxgrade > 0 ? $grade / $maxgrade : 0;
-
-        // If 3+ errors listed but grade still > 85%, apply penalty.
-        if ($error_count >= 3 && $grade_ratio > 0.85) {
-            $penalty = min($error_count * 0.5, $maxgrade * 0.15); // 0.5pt per error, max 15%
-            $grade = round($grade - $penalty, 2);
-            $notes[] = "Calibrage: {$error_count} erreurs listees, -" . $penalty . " pts";
-        }
-
-        // --- Check 3: Review text mentions incomplete/missing exercises ---
-        $review_lower = strtolower($review);
-        $incomplete_patterns = [
-            '/exercice\s*\d+\s*:?\s*(not done|non fait|incomplet|incomplete|pas fait|manquant|missing)/i',
-            '/n\'?a pas (fait|repondu|traite|termine)/i',
-            '/je n\'?ai pas (reussi|pu|su)/i',
-            '/je sais pas/i',
-        ];
-
-        $incomplete_mentions = 0;
-        foreach ($incomplete_patterns as $pat) {
-            $incomplete_mentions += preg_match_all($pat, $review);
-        }
-
-        if ($incomplete_mentions > 0 && $grade_ratio > 0.7) {
-            $penalty = min($incomplete_mentions * ($maxgrade * 0.1), $maxgrade * 0.25);
-            $grade = round($grade - $penalty, 2);
-            $notes[] = "Calibrage: {$incomplete_mentions} exercice(s) incomplet(s) detecte(s), -" . $penalty . " pts";
-        }
-
-        // --- Check 4: Counter-review significantly lower should pull down ---
+        // --- Check 2: Counter-review as sanity check (lighter weight) ---
         $p4grade = floatval($pass4->grade ?? $grade);
-        if ($p4grade < $grade && ($grade - $p4grade) > $maxgrade * 0.1) {
-            // Counter gave meaningfully lower -- use weighted: 40% pass3, 60% counter.
-            $pulled = round($grade * 0.4 + $p4grade * 0.6, 2);
+        // Ensure pass4 grade is on the same scale.
+        if ($p4grade > $maxgrade) {
+            // Pass4 probably returned a percentage or wrong scale -- normalize.
+            $p4grade = round($p4grade * $maxgrade / 100, 2);
+        }
+        if ($p4grade < $grade && ($grade - $p4grade) > $maxgrade * 0.15) {
+            // Counter gave meaningfully lower -- use weighted: 70% pass3, 30% counter.
+            $pulled = round($grade * 0.7 + $p4grade * 0.3, 2);
             if ($pulled < $grade) {
-                $notes[] = "Calibrage: contre-correction plus severe ({$p4grade}/{$maxgrade}), ajustement";
+                $notes[] = "Calibrage: contre-correction ({$p4grade}/{$maxgrade}), ajustement leger";
                 $grade = $pulled;
             }
         }
