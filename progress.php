@@ -61,6 +61,7 @@ if ($ajax) {
         'done' => $done,
         'last_student' => $lastname,
         'last_grade' => $lastgrade,
+        'maxgrade' => floatval($DB->get_field('local_dreamu_ai_config', 'maxgrade', ['assignid' => $cm->instance]) ?: 20),
     ]);
     exit;
 }
@@ -153,7 +154,7 @@ function updateProgress() {
             // Last student.
             if (data.last_student) {
                 var txt = "Dernier corrigé : " + data.last_student;
-                if (data.last_grade) txt += " (" + data.last_grade + "/" + total + ")";
+                if (data.last_grade) txt += " (" + data.last_grade + "/" + data.maxgrade + ")";
                 document.getElementById("last-student").textContent = txt;
             }
 
